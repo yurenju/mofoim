@@ -1,0 +1,18 @@
+{
+  "name": "mofoim-web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "prepare-engine": "node scripts/prepare.mjs",
+    "dev": "node scripts/prepare.mjs && vite",
+    "build": "node scripts/prepare.mjs && tsc --noEmit && vite build",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2",
+    "vite": "^8.3.8",
+    "vitest": "^5.1.0"
+  }
+}

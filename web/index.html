@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>mofoim 注音輸入法</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>mofoim</h1>
+        <p class="tagline">會容錯的注音輸入法：按到隔壁鍵，也能依前後文猜出你想打的句子。</p>
+      </header>
+
+      <p id="status" role="status">正在載入詞庫與語言模型…</p>
+
+      <section class="workspace" hidden>
+        <div class="toolbar">
+          <span id="mode" class="mode" title="按 Caps Lock 切換">中</span>
+          <span class="hint">點一下下方的框框開始打字。請先把系統輸入法切到英文。</span>
+          <button id="clear" type="button">清除</button>
+        </div>
+
+        <div class="editor-wrap">
+          <div id="editor" class="editor" tabindex="0" role="textbox" aria-multiline="true"
+               aria-label="打字區"></div>
+          <ul id="candidates" class="candidates" hidden></ul>
+        </div>
+
+        <ul class="legend">
+          <li><span class="swatch guess"></span>引擎猜的字（點它可以改選）</li>
+          <li><span class="swatch pinned"></span>你釘住的字</li>
+          <li><span class="swatch raw"></span>還沒打完或猜不出來的注音</li>
+        </ul>
+
+        <table class="shortcuts">
+          <tbody>
+            <tr><th><kbd>Enter</kbd></th><td>送出編輯區的內容</td></tr>
+            <tr><th><kbd>Shift</kbd> + <kbd>Enter</kbd></th><td>原樣送出：把按過的鍵當成英文送出</td></tr>
+            <tr><th><kbd>Backspace</kbd></th><td>刪掉最後一個按鍵</td></tr>
+            <tr><th><kbd>Esc</kbd></th><td>清空編輯區</td></tr>
+            <tr><th><kbd>Caps Lock</kbd></th><td>切換中文模式與英文模式</td></tr>
+            <tr><th><kbd>Shift</kbd> + 字母</th><td>中文模式下直接打一個大寫字母</td></tr>
+            <tr><th><kbd>Shift</kbd> + <kbd>,</kbd> <kbd>.</kbd> <kbd>/</kbd> <kbd>1</kbd> <kbd>;</kbd></th><td>，。？！：</td></tr>
+          </tbody>
+        </table>
+
+        <h2>大千鍵盤</h2>
+        <div id="keyboard" class="keyboard" aria-hidden="true"></div>
+      </section>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

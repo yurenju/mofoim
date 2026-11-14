@@ -1,0 +1,12 @@
+[package]
+name = "mofoim-wasm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "把 mofoim 的引擎包成 WebAssembly 給網頁前端使用"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+mofoim-engine = { path = "../engine" }
