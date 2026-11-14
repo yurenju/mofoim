@@ -5,6 +5,8 @@ mofoim 是一個會容錯的注音輸入法：按到隔壁鍵時，它依前後�
 
 目前有引擎和網頁版的展示頁面；Windows 與 macOS 的輸入法是之後的工作。
 
+線上試用：<https://yurenju.github.io/mofoim/>（每次 push 到 `main` 會由 GitHub Actions 自動建置並部署）
+
 名詞的定義見 [GLOSSARY.md](GLOSSARY.md)，重要的設計決定見 [docs/adr/](docs/adr/)。
 
 ## 目錄

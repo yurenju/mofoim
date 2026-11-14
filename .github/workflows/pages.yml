@@ -1,0 +1,83 @@
+# 每次 push 到 main：跑測試、建置資料檔與網頁版，然後部署到 GitHub Pages。
+name: 部署網頁版
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# 同一時間只跑一個部署；新的 push 進來時不打斷正在進行的部署。
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: 安裝 WebAssembly 編譯目標
+        run: rustup target add wasm32-unknown-unknown
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      # 上游資料固定在特定版本，版本寫在 fetch-data.sh 裡，所以用它的內容當快取的鑰匙。
+      - name: 還原上游資料的快取
+        uses: actions/cache@v6
+        with:
+          path: |
+            data/upstream
+            data/cc0-sentences
+          key: upstream-data-${{ hashFiles('scripts/fetch-data.sh') }}
+
+      - name: 下載上游資料
+        run: bash scripts/fetch-data.sh
+
+      - name: 建置資料檔
+        run: cargo run --release -p mofoim-data-builder -- model data/upstream/dict/chewing_v4 data/mofoim.dat
+
+      - name: 引擎與工具的測試
+        run: cargo test --workspace
+
+      # 計時的測試在共用的 CI 機器上不穩定，這裡只跑準確率的部分。
+      - name: 準確率測試
+        run: >
+          cargo test --release -p mofoim-accuracy -- --ignored
+          --skip every_key_is_handled_within_the_time_budget
+          --skip a_full_composition_stays_fast
+
+      - name: 安裝網頁前端的套件
+        run: npm --prefix web ci
+
+      - name: 網頁前端的測試
+        run: npm --prefix web test
+
+      - id: pages
+        uses: actions/configure-pages@v6
+
+      - name: 建置網頁版
+        run: npm --prefix web run build -- --base="${{ steps.pages.outputs.base_path }}/"
+
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: web/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5
