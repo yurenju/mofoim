@@ -162,17 +162,26 @@ fn moving_the_cursor_into_a_pinned_segment_unpins_it() {
 fn down_enters_the_selecting_state_and_escape_leaves_it() {
     let mut engine = engine();
     assert_eq!(type_keys(&mut engine, "hk4g4").highlighted, None);
-    assert_eq!(engine.handle_key(Key::Down).highlighted, Some(0));
+    // 要第一個候選字的話按 Enter 就送出了，所以一進來就反白第二個。
+    assert_eq!(engine.handle_key(Key::Down).highlighted, Some(1));
     let snapshot = engine.handle_key(Key::Escape);
     assert_eq!(snapshot.highlighted, None);
     assert_eq!(shown(&snapshot), "ㄘㄜˋ·ㄕˋ|", "Esc 只離開選字狀態，不清空編輯區");
 }
 
 #[test]
+fn entering_the_selecting_state_highlights_the_only_candidate_when_there_is_just_one() {
+    let mut engine = engine();
+    // ㄘㄜ 還沒打完，只有整句猜測這一個候選字。
+    assert_eq!(type_keys(&mut engine, "hk").candidates.len(), 1);
+    assert_eq!(engine.handle_key(Key::Down).highlighted, Some(0));
+}
+
+#[test]
 fn up_and_down_move_the_highlight_within_the_candidates() {
     let mut engine = engine();
     type_keys(&mut engine, "hk4");
-    assert_eq!(press(&mut engine, &[Key::Down, Key::Down]).highlighted, Some(1));
+    assert_eq!(press(&mut engine, &[Key::Down, Key::Down]).highlighted, Some(2));
     let last = engine.snapshot().candidates.len() - 1;
     assert_eq!(press(&mut engine, &[Key::Down; 9]).highlighted, Some(last), "停在最後一個");
     assert_eq!(press(&mut engine, &[Key::Up; 9]).highlighted, Some(0), "停在第一個");
@@ -217,7 +226,7 @@ fn a_digit_with_no_candidate_does_nothing() {
     type_keys(&mut engine, "hk4");
     let snapshot = press(&mut engine, &[Key::Down, Key::Char('9')]);
     assert_eq!(shown(&snapshot), "ㄘㄜˋ|");
-    assert_eq!(snapshot.highlighted, Some(0));
+    assert_eq!(snapshot.highlighted, Some(1));
     assert!(snapshot.handled);
 }
 
@@ -226,7 +235,7 @@ fn enter_sends_when_the_whole_sentence_guess_is_highlighted() {
     let mut engine = engine();
     type_keys(&mut engine, "hk4g4");
     pin(&mut engine, "冊");
-    let snapshot = press(&mut engine, &[Key::Down, Key::Enter]);
+    let snapshot = press(&mut engine, &[Key::Down, Key::Up, Key::Enter]);
     assert_eq!(snapshot.committed, "冊是");
     assert!(snapshot.is_empty());
     assert_eq!(snapshot.highlighted, None);
@@ -236,7 +245,7 @@ fn enter_sends_when_the_whole_sentence_guess_is_highlighted() {
 fn enter_pins_the_highlighted_candidate_when_it_is_not_the_first() {
     let mut engine = engine();
     type_keys(&mut engine, "hk4g4");
-    let snapshot = press(&mut engine, &[Key::Down, Key::Down, Key::Down, Key::Enter]);
+    let snapshot = press(&mut engine, &[Key::Down, Key::Down, Key::Enter]);
     assert_eq!(snapshot.committed, "");
     assert_eq!(shown(&snapshot), "[側]ㄕˋ|");
 }

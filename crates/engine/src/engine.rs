@@ -35,7 +35,7 @@ pub enum Key {
     SyllableRight,
     /// 游標移到最後。
     End,
-    /// 打字狀態下進入選字狀態；選字狀態下把反白往下、往上移。
+    /// 打字狀態下進入選字狀態並反白第二個候選字；選字狀態下把反白往下、往上移。
     Down,
     Up,
     /// 選字狀態下換到下一頁、上一頁候選字。
@@ -295,7 +295,10 @@ impl Engine {
                 self.move_right(keys);
             }
             Key::End => self.move_right(self.after.len()),
-            Key::Down => self.highlighted = (!self.lattice.strokes().is_empty()).then_some(0),
+            // 進入選字狀態時直接反白第二個：要第一個的話按 Enter 就送出了，不需要進來選。
+            Key::Down => {
+                self.highlighted = self.choices().len().checked_sub(1).map(|last| last.min(1));
+            }
             Key::Up | Key::PageDown | Key::PageUp => {}
         }
         snapshot
