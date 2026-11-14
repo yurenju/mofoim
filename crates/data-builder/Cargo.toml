@@ -1,0 +1,9 @@
+[package]
+name = "mofoim-data-builder"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "把上游的詞庫與語言模型轉成引擎使用的資料檔"
+
+[dependencies]
+mofoim-engine = { path = "../engine" }
