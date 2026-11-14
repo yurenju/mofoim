@@ -28,12 +28,13 @@ const WORDS: &[(&str, &str, f32)] = &[
     ("本", "ㄅㄣˇ", -3.0),
     ("書", "ㄕㄨ", -3.4),
     ("輸", "ㄕㄨ", -3.5),
+    ("個", "ㄍㄜˋ", -2.5),
 ];
 
 const BIGRAMS: &[(&str, &str, f32)] = &[
     ("一", "本", -1.2),
     ("本", "書", -0.8),
-    ("本", "手冊", -1.5),
+    ("本", "手冊", -0.8),
     ("我", "是", -1.0),
 ];
 
@@ -69,4 +70,9 @@ pub fn type_keys(engine: &mut Engine, keys: &str) -> Snapshot {
 /// 按下所有按鍵後編輯區的文字。
 pub fn typed(keys: &str) -> String {
     type_keys(&mut engine(), keys).text()
+}
+
+/// 關閉容錯的引擎，用來對照。
+pub fn exact_engine() -> Engine {
+    engine_with(Config { max_typos_per_syllable: 0, ..Config::default() })
 }

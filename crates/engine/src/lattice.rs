@@ -18,7 +18,8 @@ const MAX_SYLLABLE_KEYS: usize = 4;
 /// 影響猜測結果的參數。分數都是 log10 機率，越接近 0 越好。
 #[derive(Clone, Debug)]
 pub struct Config {
-    /// 每一次誤觸的扣分。
+    /// 每一次誤觸的扣分。這個數值是用準確率測試調出來的：扣太少會把打對的字改錯，
+    /// 扣太多則救不回誤觸。
     pub typo_penalty: f32,
     /// 一個音節裡最多容許幾次誤觸；0 代表關閉容錯。
     pub max_typos_per_syllable: u8,
@@ -39,8 +40,8 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Config {
         Config {
-            typo_penalty: -3.0,
-            max_typos_per_syllable: 0,
+            typo_penalty: -3.5,
+            max_typos_per_syllable: 2,
             max_typos_per_word: 3,
             raw_penalty: -20.0,
             words_per_span: 40,

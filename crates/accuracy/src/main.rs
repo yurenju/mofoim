@@ -1,7 +1,7 @@
 //! 印出準確率報告。
 //!
 //! ```text
-//! mofoim-accuracy [資料檔] [句子檔] [--typo-rate 0.03] [--penalty -3.0] [--max-typos 1]
+//! mofoim-accuracy [資料檔] [句子檔] [--typo-rate 0.03] [--penalty -3.5] [--max-typos 2]
 //! ```
 
 use mofoim_accuracy::{measure, Report};
