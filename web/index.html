@@ -25,21 +25,30 @@
         <div class="editor-wrap">
           <div id="editor" class="editor" tabindex="0" role="textbox" aria-multiline="true"
                aria-label="打字區"></div>
-          <ul id="candidates" class="candidates" hidden></ul>
+          <div id="candidates" class="candidates" hidden>
+            <ul id="candidate-list"></ul>
+            <div id="candidate-hint" class="candidate-hint"></div>
+          </div>
         </div>
 
         <ul class="legend">
-          <li><span class="swatch guess"></span>引擎猜的字（點它可以改選）</li>
+          <li><span class="swatch zhuyin"></span>你實際按的鍵（還沒釘住）</li>
+          <li><span class="swatch after"></span>游標之後的注音，不參與猜測</li>
           <li><span class="swatch pinned"></span>你釘住的字</li>
-          <li><span class="swatch raw"></span>還沒打完或猜不出來的注音</li>
+          <li><span class="swatch corrected"></span>候選字裡容錯改過的字</li>
         </ul>
 
         <table class="shortcuts">
           <tbody>
-            <tr><th><kbd>Enter</kbd></th><td>送出編輯區的內容</td></tr>
+            <tr><th><kbd>Enter</kbd></th><td>送出第一個候選字（釘住的字加上整句猜測）</td></tr>
+            <tr><th><kbd>空白鍵</kbd></th><td>一聲，不用來選字</td></tr>
+            <tr><th><kbd>↓</kbd></th><td>進入選字狀態：出現編號，<kbd>1</kbd>～<kbd>9</kbd>、<kbd>0</kbd> 選字，<kbd>↑</kbd> <kbd>↓</kbd> 移動反白，<kbd>Esc</kbd> 回到打字</td></tr>
+            <tr><th><kbd>←</kbd> <kbd>→</kbd></th><td>游標移一個注音符號；移進釘住的字會把它退回注音</td></tr>
+            <tr><th><kbd>Ctrl</kbd> + <kbd>←</kbd> <kbd>→</kbd></th><td>游標移一個字</td></tr>
+            <tr><th><kbd>End</kbd></th><td>游標回到最後</td></tr>
+            <tr><th><kbd>Backspace</kbd></th><td>刪掉游標前的一個符號；緊接在釘住的字後面時，先把它退回注音</td></tr>
             <tr><th><kbd>Shift</kbd> + <kbd>Enter</kbd></th><td>原樣送出：把按過的鍵當成英文送出</td></tr>
-            <tr><th><kbd>Backspace</kbd></th><td>刪掉最後一個按鍵</td></tr>
-            <tr><th><kbd>Esc</kbd></th><td>清空編輯區</td></tr>
+            <tr><th><kbd>Esc</kbd></th><td>打字狀態下清空編輯區</td></tr>
             <tr><th><kbd>Caps Lock</kbd> 或左上角的按鈕</th><td>切換中文模式與英文模式</td></tr>
             <tr><th><kbd>Shift</kbd> + 字母</th><td>中文模式下直接打一個大寫字母</td></tr>
             <tr><th><kbd>Shift</kbd> + <kbd>,</kbd> <kbd>.</kbd> <kbd>/</kbd> <kbd>1</kbd> <kbd>;</kbd></th><td>，。？！：</td></tr>

@@ -2,14 +2,13 @@
 
 mod common;
 
-use common::{engine, engine_with, type_keys, typed};
-use mofoim_engine::{CellKind, Config, Key};
+use common::{engine, engine_with, shown, type_keys, typed};
+use mofoim_engine::{Config, Key};
 
 #[test]
 fn a_finished_syllable_becomes_the_most_likely_character() {
     let snapshot = type_keys(&mut engine(), "hk4");
     assert_eq!(snapshot.text(), "測");
-    assert_eq!(snapshot.cells[0].kind, CellKind::Guess);
     assert!(snapshot.handled);
     assert_eq!(snapshot.committed, "");
 }
@@ -18,7 +17,31 @@ fn a_finished_syllable_becomes_the_most_likely_character() {
 fn an_unfinished_syllable_shows_the_symbols_actually_pressed() {
     let snapshot = type_keys(&mut engine(), "hk");
     assert_eq!(snapshot.text(), "ㄘㄜ");
-    assert!(snapshot.cells.iter().all(|c| c.kind == CellKind::Raw));
+}
+
+#[test]
+fn the_editing_area_shows_zhuyin_and_the_characters_are_only_in_the_candidates() {
+    let snapshot = type_keys(&mut engine(), "g.3hk4");
+    assert_eq!(shown(&snapshot), "ㄕㄡˇ·ㄘㄜˋ|");
+    assert!(snapshot.pinned.is_empty());
+    assert_eq!(snapshot.candidates[0].text, "手冊");
+}
+
+#[test]
+fn the_editing_area_shows_the_keys_pressed_not_the_reading_the_engine_guessed() {
+    // k 按成隔壁的 l：引擎猜的是「測」（ㄘㄜˋ），但編輯區要照實顯示 ㄘㄠˋ。
+    let snapshot = type_keys(&mut engine(), "hl4");
+    assert_eq!(snapshot.text(), "測");
+    assert_eq!(shown(&snapshot), "ㄘㄠˋ|");
+}
+
+#[test]
+fn keys_are_grouped_into_syllables() {
+    assert_eq!(shown(&type_keys(&mut engine(), "u 1p3gj ")), "ㄧ ·ㄅㄣˇ·ㄕㄨ |", "一聲顯示成空格");
+    assert_eq!(shown(&type_keys(&mut engine(), "g.3h")), "ㄕㄡˇ·ㄘ|", "還沒打完的音節自己一組");
+    assert_eq!(shown(&type_keys(&mut engine(), "hkk4hh")), "ㄘㄜㄜˋ·ㄘㄘ|", "猜不出來的以聲調為界");
+    // 引擎認出 4 是按錯的 e 時，照它的切法分組，而不是看到聲調就切。
+    assert_eq!(shown(&type_keys(&mut engine(), "ji3g44k4")), "ㄨㄛˇ·ㄕˋ·ˋㄜˋ|");
 }
 
 #[test]
@@ -74,7 +97,7 @@ fn enter_sends_the_whole_composition() {
     type_keys(&mut engine, "ji3g4");
     let snapshot = engine.handle_key(Key::Enter);
     assert_eq!(snapshot.committed, "我是");
-    assert!(snapshot.cells.is_empty());
+    assert!(snapshot.is_empty());
     assert!(snapshot.handled);
 }
 
@@ -99,15 +122,33 @@ fn escape_clears_the_composition_without_sending() {
     let mut engine = engine();
     type_keys(&mut engine, "ji3");
     let snapshot = engine.handle_key(Key::Escape);
-    assert!(snapshot.cells.is_empty());
+    assert!(snapshot.is_empty());
     assert_eq!(snapshot.committed, "");
 }
 
 #[test]
 fn editing_keys_pass_through_when_nothing_is_being_composed() {
     let mut engine = engine();
-    for key in [Key::Enter, Key::ShiftEnter, Key::Backspace, Key::Escape, Key::Char(' ')] {
-        assert!(!engine.handle_key(key).handled, "{key:?}");
+    let keys = [
+        Key::Enter,
+        Key::ShiftEnter,
+        Key::Backspace,
+        Key::Escape,
+        Key::Char(' '),
+        Key::Left,
+        Key::Right,
+        Key::SyllableLeft,
+        Key::SyllableRight,
+        Key::End,
+        Key::Down,
+        Key::Up,
+        Key::PageDown,
+        Key::PageUp,
+    ];
+    for key in keys {
+        let snapshot = engine.handle_key(key);
+        assert!(!snapshot.handled, "{key:?}");
+        assert_eq!(snapshot.highlighted, None, "{key:?}");
     }
 }
 
@@ -118,7 +159,7 @@ fn the_front_is_sent_automatically_when_the_composition_gets_too_long() {
     let mut last = engine.snapshot();
     for ch in "g.3hk4g.3hk4ji3g4".chars() {
         last = engine.handle_key(Key::Char(ch));
-        assert!(last.cells.len() <= 4, "編輯區不能超過上限");
+        assert!(last.text().chars().count() <= 4, "編輯區不能超過上限");
         sent.push_str(&last.committed);
     }
     assert!(sent.starts_with("手冊"), "最前面的部分要先送出，實際送出：{sent}");

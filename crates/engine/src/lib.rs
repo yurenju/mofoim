@@ -9,7 +9,7 @@ pub mod layout;
 pub mod model;
 pub mod syllable;
 
-pub use engine::{Cell, CellKind, Engine, Key, Mode, Snapshot};
+pub use engine::{Candidate, Engine, Key, Mode, Snapshot, PAGE_SIZE};
 pub use lattice::Config;
 pub use layout::Layout;
 pub use model::{Model, ModelBuilder};

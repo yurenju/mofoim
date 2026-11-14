@@ -3,17 +3,25 @@
 import wasmUrl from "./wasm/mofoim.wasm?url";
 import type { EngineKey } from "./keys";
 
-export type CellKind = "guess" | "pinned" | "raw" | "literal";
-
-/** 編輯區裡的一格：一個漢字、一個注音符號，或一個原樣字元。 */
-export interface Cell {
+/** 一個候選字。 */
+export interface Candidate {
   text: string;
-  kind: CellKind;
+  /** `text` 裡第幾個字是容錯改過的；只有整句猜測會標示。 */
+  corrected: number[];
 }
 
 /** 每次操作後引擎回傳的完整狀態。 */
 export interface Snapshot {
-  cells: Cell[];
+  /** 釘住的段，由前到後，每一段是使用者選定的文字。 */
+  pinned: string[];
+  /** 游標之前、還沒釘住的按鍵：一個音節一個字串、一個按鍵一個字元，一聲是空格。 */
+  beforeCursor: string[];
+  /** 游標之後的按鍵，格式同上。 */
+  afterCursor: string[];
+  /** 候選字。第一個是整句猜測，其餘是只涵蓋前面幾個音節的較短字詞。 */
+  candidates: Candidate[];
+  /** 選字狀態下反白的是第幾個候選字；`null` 代表打字狀態。 */
+  highlighted: number | null;
   /** 這次操作要送出的文字。 */
   committed: string;
   mode: "chinese" | "english";
@@ -27,8 +35,7 @@ interface Exports {
   mofoim_free(pointer: number, len: number): void;
   mofoim_load(pointer: number, len: number): number;
   mofoim_key(kind: number, ch: number): void;
-  mofoim_candidates(cell: number): void;
-  mofoim_pin(cell: number, candidate: number): void;
+  mofoim_pin(candidate: number): void;
   mofoim_snapshot(): void;
   mofoim_output_ptr(): number;
   mofoim_output_len(): number;
@@ -43,6 +50,15 @@ const KEY_CODES: Record<EngineKey["kind"], number> = {
   backspace: 4,
   escape: 5,
   toggleMode: 6,
+  left: 7,
+  right: 8,
+  syllableLeft: 9,
+  syllableRight: 10,
+  end: 11,
+  down: 12,
+  up: 13,
+  pageDown: 14,
+  pageUp: 15,
 };
 
 export class Engine {
@@ -67,15 +83,9 @@ export class Engine {
     return JSON.parse(this.output());
   }
 
-  /** 編輯區第 `cell` 格可以選的候選字詞。 */
-  candidates(cell: number): string[] {
-    this.wasm.mofoim_candidates(cell);
-    return JSON.parse(this.output());
-  }
-
-  /** 把第 `cell` 格釘住成第 `candidate` 個候選字詞。 */
-  pin(cell: number, candidate: number): Snapshot {
-    this.wasm.mofoim_pin(cell, candidate);
+  /** 釘住第 `candidate` 個候選字（滑鼠點選用）。 */
+  pin(candidate: number): Snapshot {
+    this.wasm.mofoim_pin(candidate);
     return JSON.parse(this.output());
   }
 

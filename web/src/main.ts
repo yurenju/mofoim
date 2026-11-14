@@ -1,70 +1,118 @@
-// 網頁前端：接鍵盤事件、把按鍵交給引擎、依狀態快照畫出編輯區與候選字清單。
+// 網頁前端：接鍵盤事件、把按鍵交給引擎、依狀態快照畫出編輯區與候選字。
+//
+// 游標、釘住與選字狀態都由引擎決定（見 ADR 0004），這裡只負責照狀態快照畫出來。
 
-import { Engine, type Snapshot } from "./engine";
+import { Engine, type Candidate, type Snapshot } from "./engine";
 import { plainText, toEngineKey, type EngineKey } from "./keys";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const status = $("status");
 const workspace = document.querySelector<HTMLElement>(".workspace")!;
+const editorWrap = document.querySelector<HTMLElement>(".editor-wrap")!;
 const editor = $("editor");
 const modeBadge = $("mode");
-const candidateList = $<HTMLUListElement>("candidates");
+const candidateWindow = $("candidates");
+const candidateList = $<HTMLUListElement>("candidate-list");
+const candidateHint = $("candidate-hint");
+
+/** 候選窗一頁顯示幾個候選字，對應數字鍵 1～9、0；要和引擎的 `PAGE_SIZE` 一致。 */
+const PAGE_SIZE = 10;
+const PAGE_KEYS = "1234567890";
 
 /** 已經送出的文字。這個展示頁面自己扮演「應用程式」的角色。 */
 let sent = "";
-let snapshot: Snapshot = { cells: [], committed: "", mode: "chinese", handled: true };
-/** 目前打開候選字清單的是編輯區第幾格；沒打開就是 `null`。 */
-let openCell: number | null = null;
+let snapshot: Snapshot = {
+  pinned: [],
+  beforeCursor: [],
+  afterCursor: [],
+  candidates: [],
+  highlighted: null,
+  committed: "",
+  mode: "chinese",
+  handled: true,
+};
 let engine: Engine;
+
+const span = (className: string, text = "") => {
+  const element = document.createElement("span");
+  element.className = className;
+  element.textContent = text;
+  return element;
+};
+
+/** 編輯區有沒有還沒送出的內容。 */
+function isComposing(state: Snapshot) {
+  return state.pinned.length + state.beforeCursor.length + state.afterCursor.length > 0;
+}
+
+/** 一串還沒釘住的注音：音節之間留空隙，一聲（空格）畫成一小段空白。 */
+function zhuyin(syllables: string[], className: string) {
+  const run = span(className);
+  for (const syllable of syllables) run.append(span("syllable", syllable));
+  return run;
+}
 
 function render() {
   editor.replaceChildren();
   editor.append(document.createTextNode(sent));
-  snapshot.cells.forEach((cell, index) => {
-    const selectable = cell.kind === "guess" || cell.kind === "pinned";
-    const element = document.createElement("span");
-    element.className = `cell ${cell.kind}`;
-    element.textContent = cell.text;
-    if (selectable) {
-      element.dataset.cell = String(index);
-      element.title = "點一下改選其他字";
-    }
-    editor.append(element);
-  });
-  const caret = document.createElement("span");
-  caret.className = "caret";
-  editor.append(caret);
+
+  // 釘住的段是漢字；還沒釘住的按鍵照實際按的鍵顯示成注音；游標之後的注音是灰色。
+  for (const text of snapshot.pinned) editor.append(span("pinned", text));
+  const unpinned = snapshot.beforeCursor.length + snapshot.afterCursor.length > 0;
+  if (snapshot.pinned.length > 0 && unpinned) editor.append(span("gap"));
+  const before = zhuyin(snapshot.beforeCursor, "zhuyin");
+  const caret = span("caret");
+  editor.append(before, caret, zhuyin(snapshot.afterCursor, "zhuyin after"));
 
   const english = snapshot.mode === "english";
   modeBadge.textContent = english ? "英" : "中";
   modeBadge.classList.toggle("english", english);
   modeBadge.setAttribute("aria-label", english ? "英文模式，按一下切換成中文模式" : "中文模式，按一下切換成英文模式");
-  if (openCell !== null && !editor.querySelector(`[data-cell="${openCell}"]`)) openCell = null;
-  renderCandidates();
+  renderCandidates(snapshot.beforeCursor.length > 0 ? before : caret);
 }
 
-function renderCandidates() {
+/** 候選字的文字；容錯改過的字另外包起來畫橘色虛線。 */
+function candidateText(candidate: Candidate) {
+  const text = span("text");
+  Array.from(candidate.text).forEach((ch, index) => {
+    text.append(candidate.corrected.includes(index) ? span("corrected", ch) : ch);
+  });
+  return text;
+}
+
+/** 畫出候選窗，放在 `anchor`（還沒釘住的注音的開頭）正下方。 */
+function renderCandidates(anchor: HTMLElement) {
+  const { candidates, highlighted } = snapshot;
   candidateList.replaceChildren();
-  candidateList.hidden = openCell === null;
-  if (openCell === null) return;
-  const anchor = editor.querySelector<HTMLElement>(`[data-cell="${openCell}"]`)!;
-  engine.candidates(openCell).forEach((word, index) => {
+  candidateWindow.hidden = candidates.length === 0;
+  if (candidates.length === 0) return;
+
+  // 打字狀態下數字鍵是注音，所以不顯示編號，但留著編號的位置，進入選字狀態時版面才不會跳。
+  const selecting = highlighted !== null;
+  const active = highlighted ?? 0;
+  const pageStart = Math.floor(active / PAGE_SIZE) * PAGE_SIZE;
+  candidates.slice(pageStart, pageStart + PAGE_SIZE).forEach((candidate, offset) => {
+    const index = pageStart + offset;
     const item = document.createElement("li");
     const button = document.createElement("button");
     button.type = "button";
     button.dataset.candidate = String(index);
-    if (index < 9) {
-      const number = document.createElement("span");
-      number.className = "number";
-      number.textContent = String(index + 1);
-      button.append(number);
-    }
-    button.append(word);
+    button.classList.toggle("on", index === active);
+    button.append(span("number", selecting ? PAGE_KEYS[offset] : ""), candidateText(candidate));
     item.append(button);
     candidateList.append(item);
   });
-  candidateList.style.left = `${anchor.offsetLeft}px`;
-  candidateList.style.top = `${anchor.offsetTop + anchor.offsetHeight + 4}px`;
+
+  const pages = Math.ceil(candidates.length / PAGE_SIZE);
+  const hints = selecting
+    ? ["數字 選字", active === 0 ? "Enter 送出" : "Enter 選反白的", "Esc 回到打字"]
+    : ["Enter 送出第一個", "↓ 用數字選", "滑鼠點選"];
+  if (selecting && pages > 1) hints.push(`PgUp PgDn 換頁（${pageStart / PAGE_SIZE + 1}/${pages}）`);
+  candidateHint.replaceChildren(...hints.map((hint) => span("", hint)));
+
+  const left = Math.min(anchor.offsetLeft, editorWrap.clientWidth - candidateWindow.offsetWidth);
+  candidateWindow.style.left = `${Math.max(0, left)}px`;
+  candidateWindow.style.top = `${anchor.offsetTop + anchor.offsetHeight + 6}px`;
 }
 
 function apply(next: Snapshot) {
@@ -73,60 +121,45 @@ function apply(next: Snapshot) {
   render();
 }
 
-/** 把第 `candidate` 個候選字詞釘在目前打開的那一格。 */
-function choose(candidate: number) {
-  if (openCell === null) return;
-  const cell = openCell;
-  openCell = null;
-  apply(engine.pin(cell, candidate));
-}
-
-/** 引擎不處理的按鍵，由這個頁面自己當成一般的文字編輯。 */
+/**
+ * 引擎不處理的按鍵，由這個頁面自己當成一般的文字編輯。
+ * 回傳這個頁面有沒有處理；沒有的話（例如方向鍵）就留給瀏覽器。
+ */
 function editPlainText(key: EngineKey) {
   if (key.kind === "enter" || key.kind === "shiftEnter") sent += "\n";
   else if (key.kind === "backspace") sent = Array.from(sent).slice(0, -1).join("");
-  else sent += plainText(key);
+  else if (key.kind === "char" || key.kind === "shift") sent += plainText(key);
+  else return false;
+  return true;
 }
 
 /** 切換中文模式與英文模式。 */
 function toggleMode() {
-  openCell = null;
   apply(engine.key({ kind: "toggleMode" }));
 }
 
 editor.addEventListener("keydown", (event) => {
   const key = toEngineKey(event);
   if (!key) return;
-  event.preventDefault();
   // Caps Lock 可能被系統的輸入法攔走，所以畫面上另外有一個按鈕做同樣的事。
   if (key.kind === "toggleMode") {
+    event.preventDefault();
     if (!event.repeat) toggleMode();
     return;
   }
 
-  if (openCell !== null) {
-    const picked = key.kind === "char" ? "123456789".indexOf(key.ch) : -1;
-    if (picked >= 0 && candidateList.children[picked]) return choose(picked);
-    openCell = null;
-    if (key.kind === "escape") return render();
-  }
-
+  // 編輯區有內容時，所有按鍵都屬於輸入法：Enter 只送出、不會再多加一個換行。
+  const composing = isComposing(snapshot);
   const next = engine.key(key);
-  if (!next.handled) editPlainText(key);
+  if (next.handled || composing || editPlainText(key)) event.preventDefault();
   apply(next);
 });
 
-editor.addEventListener("click", (event) => {
-  const cell = (event.target as HTMLElement).dataset.cell;
-  const clicked = cell === undefined ? null : Number(cell);
-  openCell = clicked === openCell ? null : clicked;
-  renderCandidates();
-});
-
-candidateList.addEventListener("mousedown", (event) => event.preventDefault());
+// 點候選字不搶走打字區的焦點，選完可以直接繼續打字。
+candidateWindow.addEventListener("mousedown", (event) => event.preventDefault());
 candidateList.addEventListener("click", (event) => {
   const button = (event.target as HTMLElement).closest<HTMLElement>("[data-candidate]");
-  if (button) choose(Number(button.dataset.candidate));
+  if (button) apply(engine.pin(Number(button.dataset.candidate)));
 });
 
 // 按鈕不搶走打字區的焦點，切換後可以直接繼續打字。
@@ -138,8 +171,10 @@ modeBadge.addEventListener("click", () => {
 
 $("clear").addEventListener("click", () => {
   sent = "";
-  openCell = null;
-  apply(engine.key({ kind: "escape" }));
+  // 選字狀態下第一次 Esc 只會回到打字狀態，所以最多要按兩次才清得乾淨。
+  let next = engine.key({ kind: "escape" });
+  if (isComposing(next)) next = engine.key({ kind: "escape" });
+  apply(next);
   editor.focus();
 });
 

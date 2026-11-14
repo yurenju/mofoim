@@ -4,7 +4,7 @@
 //! 前端呼叫一個操作後，再用 `mofoim_output_ptr` 與 `mofoim_output_len` 取回結果。
 //! 結果一律是 UTF-8 的 JSON 字串，對應的前端包裝在 `web/src/engine.ts`。
 
-use mofoim_engine::{CellKind, Config, Engine, Key, Mode, Model, Snapshot};
+use mofoim_engine::{Config, Engine, Key, Mode, Model, Snapshot};
 use std::sync::{Arc, Mutex};
 
 struct State {
@@ -67,22 +67,12 @@ pub extern "C" fn mofoim_key(kind: u32, ch: u32) {
     });
 }
 
-/// 編輯區第 `cell` 格的候選字詞，結果是 JSON 字串陣列。
+/// 釘住第 `candidate` 個候選字（滑鼠點選用），結果是狀態快照。
 #[no_mangle]
-pub extern "C" fn mofoim_candidates(cell: usize) {
-    with_state(|state| {
-        let words = state.engine.as_ref().map(|e| e.candidates(cell)).unwrap_or_default();
-        let items: Vec<String> = words.iter().map(|w| json_string(w)).collect();
-        state.output = format!("[{}]", items.join(","));
-    });
-}
-
-/// 把第 `cell` 格釘住成第 `candidate` 個候選字詞，結果是狀態快照。
-#[no_mangle]
-pub extern "C" fn mofoim_pin(cell: usize, candidate: usize) {
+pub extern "C" fn mofoim_pin(candidate: usize) {
     with_state(|state| {
         let Some(engine) = state.engine.as_mut() else { return state.output.clear() };
-        state.output = snapshot_json(&engine.pin(cell, candidate));
+        state.output = snapshot_json(&engine.pin(candidate));
     });
 }
 
@@ -110,7 +100,8 @@ pub extern "C" fn mofoim_output_len() -> usize {
 }
 
 /// 按鍵種類的編號：0 字元鍵、1 按住 Shift 的字元鍵、2 Enter、3 Shift+Enter、
-/// 4 Backspace、5 Esc、6 切換中英。前兩種的 `ch` 是美式鍵盤沒按 Shift 時的字元。
+/// 4 Backspace、5 Esc、6 切換中英、7 ←、8 →、9 Ctrl+←、10 Ctrl+→、11 End、12 ↓、13 ↑、
+/// 14 Page Down、15 Page Up。前兩種的 `ch` 是美式鍵盤沒按 Shift 時的字元。
 fn key_from_code(kind: u32, ch: u32) -> Option<Key> {
     Some(match kind {
         0 => Key::Char(char::from_u32(ch)?),
@@ -120,31 +111,48 @@ fn key_from_code(kind: u32, ch: u32) -> Option<Key> {
         4 => Key::Backspace,
         5 => Key::Escape,
         6 => Key::ToggleMode,
+        7 => Key::Left,
+        8 => Key::Right,
+        9 => Key::SyllableLeft,
+        10 => Key::SyllableRight,
+        11 => Key::End,
+        12 => Key::Down,
+        13 => Key::Up,
+        14 => Key::PageDown,
+        15 => Key::PageUp,
         _ => return None,
     })
 }
 
 fn snapshot_json(snapshot: &Snapshot) -> String {
-    let cells: Vec<String> = snapshot
-        .cells
+    let strings = |items: &[String]| -> String {
+        let items: Vec<String> = items.iter().map(|item| json_string(item)).collect();
+        format!("[{}]", items.join(","))
+    };
+    let candidates: Vec<String> = snapshot
+        .candidates
         .iter()
-        .map(|cell| {
-            let kind = match cell.kind {
-                CellKind::Guess => "guess",
-                CellKind::Pinned => "pinned",
-                CellKind::Raw => "raw",
-                CellKind::Literal => "literal",
-            };
-            format!("{{\"text\":{},\"kind\":\"{kind}\"}}", json_string(&cell.text))
+        .map(|candidate| {
+            let corrected: Vec<String> = candidate.corrected.iter().map(usize::to_string).collect();
+            format!(
+                "{{\"text\":{},\"corrected\":[{}]}}",
+                json_string(&candidate.text),
+                corrected.join(",")
+            )
         })
         .collect();
+    let highlighted = snapshot.highlighted.map_or("null".to_string(), |index| index.to_string());
     let mode = match snapshot.mode {
         Mode::Chinese => "chinese",
         Mode::English => "english",
     };
     format!(
-        "{{\"cells\":[{}],\"committed\":{},\"mode\":\"{mode}\",\"handled\":{}}}",
-        cells.join(","),
+        "{{\"pinned\":{},\"beforeCursor\":{},\"afterCursor\":{},\"candidates\":[{}],\
+         \"highlighted\":{highlighted},\"committed\":{},\"mode\":\"{mode}\",\"handled\":{}}}",
+        strings(&snapshot.pinned),
+        strings(&snapshot.before_cursor),
+        strings(&snapshot.after_cursor),
+        candidates.join(","),
         json_string(&snapshot.committed),
         snapshot.handled
     )
@@ -180,6 +188,8 @@ mod tests {
         assert_eq!(key_from_code(0, 'h' as u32), Some(Key::Char('h')));
         assert_eq!(key_from_code(1, '1' as u32), Some(Key::Shift('1')));
         assert_eq!(key_from_code(3, 0), Some(Key::ShiftEnter));
+        assert_eq!(key_from_code(9, 0), Some(Key::SyllableLeft));
+        assert_eq!(key_from_code(15, 0), Some(Key::PageUp));
         assert_eq!(key_from_code(99, 0), None);
     }
 
@@ -189,12 +199,24 @@ mod tests {
         builder.add_entry("冊", "ㄘㄜˋ", 0.0);
         let model = Arc::new(Model::from_bytes(&builder.build()).unwrap());
         let mut engine = Engine::new(model, Config::default());
-        for ch in "hk4h".chars() {
+        // 第二個音節的 k 按成隔壁的 l，游標再往前移一個按鍵。
+        for ch in "hk4hl4".chars() {
             engine.handle_key(Key::Char(ch));
         }
+        engine.pin(1);
+        engine.handle_key(Key::Left);
+        engine.handle_key(Key::Down);
         assert_eq!(
             snapshot_json(&engine.snapshot()),
-            r#"{"cells":[{"text":"冊","kind":"guess"},{"text":"ㄘ","kind":"raw"}],"committed":"","mode":"chinese","handled":true}"#
+            concat!(
+                r#"{"pinned":["冊"],"beforeCursor":["ㄘㄠ"],"afterCursor":["ˋ"],"#,
+                r#""candidates":[{"text":"ㄘㄠ","corrected":[]}],"highlighted":0,"#,
+                r#""committed":"","mode":"chinese","handled":true}"#
+            )
         );
+        engine.handle_key(Key::Escape);
+        engine.handle_key(Key::End);
+        assert!(snapshot_json(&engine.snapshot())
+            .contains(r#""candidates":[{"text":"冊","corrected":[0]}],"highlighted":null"#));
     }
 }

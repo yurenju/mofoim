@@ -72,6 +72,33 @@ pub fn typed(keys: &str) -> String {
     type_keys(&mut engine(), keys).text()
 }
 
+/// 把編輯區畫成一行字，方便比對：釘住的段用方括號包起來，音節之間用 `·` 隔開，
+/// 游標是 `|`。例如 `[手]ㄘㄜˋ·ㄕ|ˋ`。
+pub fn shown(snapshot: &Snapshot) -> String {
+    let pinned: String = snapshot.pinned.iter().map(|text| format!("[{text}]")).collect();
+    format!("{pinned}{}|{}", snapshot.before_cursor.join("·"), snapshot.after_cursor.join("·"))
+}
+
+/// 候選字的文字。
+pub fn candidates(snapshot: &Snapshot) -> Vec<&str> {
+    snapshot.candidates.iter().map(|c| c.text.as_str()).collect()
+}
+
+/// 釘住文字是 `word` 的候選字。
+pub fn pin(engine: &mut Engine, word: &str) -> Snapshot {
+    let index = engine.snapshot().candidates.iter().position(|c| c.text == word);
+    engine.pin(index.unwrap_or_else(|| panic!("候選字裡沒有「{word}」")))
+}
+
+/// 依序按下 `keys` 裡的每個按鍵，回傳最後一次的快照。
+pub fn press(engine: &mut Engine, keys: &[Key]) -> Snapshot {
+    let mut last = engine.snapshot();
+    for &key in keys {
+        last = engine.handle_key(key);
+    }
+    last
+}
+
 /// 關閉容錯的引擎，用來對照。
 pub fn exact_engine() -> Engine {
     engine_with(Config { max_typos_per_syllable: 0, ..Config::default() })

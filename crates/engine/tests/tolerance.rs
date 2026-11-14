@@ -3,7 +3,6 @@
 mod common;
 
 use common::{engine, exact_engine, type_keys, typed};
-use mofoim_engine::CellKind;
 
 #[test]
 fn a_neighboring_key_is_read_as_the_intended_one() {
@@ -23,8 +22,18 @@ fn a_tone_key_hit_as_its_neighbor_still_ends_the_syllable() {
     // 4（ˋ）按成隔壁的 e（ㄍ）：引擎看不到聲調，仍然要認出這是一個字。
     let snapshot = type_keys(&mut engine(), "hke");
     assert_eq!(snapshot.text(), "測");
-    assert_eq!(snapshot.cells[0].kind, CellKind::Guess);
     assert_eq!(typed("g.3hke"), "手冊");
+}
+
+#[test]
+fn the_whole_sentence_guess_marks_the_characters_tolerance_changed() {
+    // 「冊」的聲調鍵按錯了，「手」沒有：只標示第二個字。
+    let snapshot = type_keys(&mut engine(), "g.3hke");
+    assert_eq!(snapshot.candidates[0].text, "手冊");
+    assert_eq!(snapshot.candidates[0].corrected, [1]);
+    // 照字面打對的句子沒有任何標示。
+    assert!(type_keys(&mut engine(), "g.3hk4").candidates[0].corrected.is_empty());
+    assert!(type_keys(&mut engine(), "u 1p3gj ").candidates[0].corrected.is_empty());
 }
 
 #[test]

@@ -80,17 +80,10 @@ pub struct Segment {
     pub end: usize,
     pub kind: SegmentKind,
     pub word: Option<u32>,
-    pub pinned: bool,
     /// 這一段裡每個音節從哪個位置開始（只有 `Word` 有意義）。
     pub syllable_starts: Vec<usize>,
-}
-
-/// 使用者手動選定的字詞：`start..end` 這段按鍵一定要解讀成 `word`。
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct Pin {
-    pub start: usize,
-    pub end: usize,
-    pub word: u32,
+    /// 每個音節用了幾次誤觸的解讀，和 `syllable_starts` 一一對應。
+    pub syllable_typos: Vec<u8>,
 }
 
 /// 某個位置可以選的一個候選字詞。
@@ -121,7 +114,6 @@ struct Node {
     /// 對應 `partials[結束位置]` 裡的第幾個，用來找回音節的邊界。
     partial: u32,
     score: f32,
-    pinned: bool,
 }
 
 /// 讀音樹上走到一半的進度：從 `start` 開始的按鍵，目前讀到 `node`。
@@ -143,7 +135,8 @@ pub struct Lattice {
     strokes: Vec<Stroke>,
     partials: Vec<Vec<Partial>>,
     nodes: Vec<Vec<Node>>,
-    pins: Vec<Pin>,
+    /// 按鍵序列之前的最後一個詞，讓第一個詞也能參考前文；沒有就是 `NONE`。
+    context: u32,
 }
 
 impl Lattice {
@@ -155,7 +148,7 @@ impl Lattice {
             strokes: Vec::new(),
             partials: Vec::new(),
             nodes: Vec::new(),
-            pins: Vec::new(),
+            context: NONE,
         };
         lattice.reset();
         lattice
@@ -177,10 +170,6 @@ impl Lattice {
         &self.strokes
     }
 
-    pub fn pins(&self) -> &[Pin] {
-        &self.pins
-    }
-
     fn reset(&mut self) {
         self.strokes.clear();
         self.partials = vec![Vec::new()];
@@ -188,23 +177,23 @@ impl Lattice {
             start: 0,
             back: NONE,
             kind: NodeKind::Start,
-            word: NONE,
+            // 起點帶著前文的詞，之後算分數時第一個詞就會自動參考它。
+            word: self.context,
             partial: NONE,
             score: 0.0,
-            pinned: false,
         }]];
     }
 
-    /// 清空按鍵序列與所有釘住的位置。
+    /// 清空按鍵序列與前文。
     pub fn clear(&mut self) {
-        self.pins.clear();
+        self.context = NONE;
         self.reset();
     }
 
-    /// 以新的按鍵序列與釘住位置整個重算。
-    pub fn rebuild(&mut self, strokes: Vec<Stroke>, pins: Vec<Pin>) {
+    /// 以新的按鍵序列整個重算。`context` 是這串按鍵之前的最後一個詞。
+    pub fn rebuild(&mut self, strokes: Vec<Stroke>, context: Option<u32>) {
+        self.context = context.unwrap_or(NONE);
         self.reset();
-        self.pins = pins;
         for stroke in strokes {
             self.push(stroke);
         }
@@ -212,37 +201,10 @@ impl Lattice {
 
     /// 移除最後一個按鍵。
     pub fn pop(&mut self) {
-        if self.strokes.pop().is_none() {
-            return;
+        if self.strokes.pop().is_some() {
+            self.partials.pop();
+            self.nodes.pop();
         }
-        self.partials.pop();
-        self.nodes.pop();
-        let len = self.strokes.len();
-        if self.pins.iter().any(|pin| pin.end > len) {
-            // 刪到釘住的那一段時，釘子跟著消失；先前在釘子限制下算出的結果要重算。
-            let mut pins = std::mem::take(&mut self.pins);
-            pins.retain(|pin| pin.end <= len);
-            let strokes = std::mem::take(&mut self.strokes);
-            self.rebuild(strokes, pins);
-        }
-    }
-
-    /// 釘住一段按鍵；和它重疊的舊釘子會被取代。
-    pub fn pin(&mut self, pin: Pin) {
-        let mut pins = std::mem::take(&mut self.pins);
-        pins.retain(|old| old.end <= pin.start || old.start >= pin.end);
-        pins.push(pin);
-        let strokes = std::mem::take(&mut self.strokes);
-        self.rebuild(strokes, pins);
-    }
-
-    /// `start..end` 剛好是某個釘子時，回傳被釘住的詞。
-    fn pinned_word(&self, start: usize, end: usize) -> Option<u32> {
-        self.pins.iter().find(|p| p.start == start && p.end == end).map(|p| p.word)
-    }
-
-    fn overlaps_pin(&self, start: usize, end: usize) -> bool {
-        self.pins.iter().any(|p| p.start < end && start < p.end)
     }
 
     /// 加入一個按鍵，算出所有結束在新位置的解讀。
@@ -253,22 +215,19 @@ impl Lattice {
         let mut nodes: Vec<Node> = Vec::new();
 
         // 只吃掉這一個按鍵的解讀：原樣字元，或猜不出來的注音鍵。
-        if !self.overlaps_pin(end - 1, end) {
-            if let Some(best) = self.nodes[end - 1].first() {
-                let (kind, penalty) = match stroke {
-                    Stroke::Literal(_) => (NodeKind::Literal, 0.0),
-                    Stroke::Zhuyin(_) => (NodeKind::Raw, self.config.raw_penalty),
-                };
-                nodes.push(Node {
-                    start: end as u32 - 1,
-                    back: 0,
-                    kind,
-                    word: NONE,
-                    partial: NONE,
-                    score: best.score + penalty,
-                    pinned: false,
-                });
-            }
+        if let Some(best) = self.nodes[end - 1].first() {
+            let (kind, penalty) = match stroke {
+                Stroke::Literal(_) => (NodeKind::Literal, 0.0),
+                Stroke::Zhuyin(_) => (NodeKind::Raw, self.config.raw_penalty),
+            };
+            nodes.push(Node {
+                start: end as u32 - 1,
+                back: 0,
+                kind,
+                word: NONE,
+                partial: NONE,
+                score: best.score + penalty,
+            });
         }
 
         if matches!(stroke, Stroke::Zhuyin(_)) {
@@ -317,22 +276,13 @@ impl Lattice {
                 if previous.is_empty() || entries.is_empty() {
                     continue;
                 }
-                let pinned = self.pinned_word(start, end);
-                if pinned.is_none() && self.overlaps_pin(start, end) {
-                    continue;
-                }
-                let limit = if pinned.is_some() {
-                    entries.len()
-                } else if partial.typos == 0 {
+                let limit = if partial.typos == 0 {
                     self.config.words_per_span
                 } else {
                     self.config.words_per_typo_span
                 };
                 let typo_cost = self.config.typo_penalty * partial.typos as f32;
                 for entry in entries.iter().take(limit) {
-                    if pinned.is_some_and(|word| word != entry.word) {
-                        continue;
-                    }
                     let mut best = (0u32, f32::NEG_INFINITY);
                     for (i, node) in previous.iter().enumerate() {
                         let context = (node.word != NONE).then_some(node.word);
@@ -348,7 +298,6 @@ impl Lattice {
                         word: entry.word,
                         partial: index as u32,
                         score: best.1 + entry.penalty + typo_cost,
-                        pinned: pinned.is_some(),
                     });
                 }
             }
@@ -419,16 +368,23 @@ impl Lattice {
         while node.kind != NodeKind::Start {
             let start = node.start as usize;
             let mut syllable_starts = Vec::new();
+            let mut syllable_typos = Vec::new();
             if node.kind == NodeKind::Word {
                 let mut partial = self.partials[end][node.partial as usize];
                 loop {
                     syllable_starts.push(partial.syllable_start as usize);
                     if partial.parent == NONE {
+                        syllable_typos.push(partial.typos);
                         break;
                     }
-                    partial = self.partials[partial.syllable_start as usize][partial.parent as usize];
+                    // 誤觸次數是從詞的開頭累計的，相減才是這個音節自己的。
+                    let parent =
+                        self.partials[partial.syllable_start as usize][partial.parent as usize];
+                    syllable_typos.push(partial.typos - parent.typos);
+                    partial = parent;
                 }
                 syllable_starts.reverse();
+                syllable_typos.reverse();
             }
             segments.push(Segment {
                 start,
@@ -439,8 +395,8 @@ impl Lattice {
                     _ => SegmentKind::Literal,
                 },
                 word: (node.word != NONE).then_some(node.word),
-                pinned: node.pinned,
                 syllable_starts,
+                syllable_typos,
             });
             let previous = self.nodes[start][node.back as usize];
             end = start;

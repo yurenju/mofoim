@@ -5,7 +5,9 @@
 
 export type EngineKey =
   | { kind: "char" | "shift"; ch: string }
-  | { kind: "enter" | "shiftEnter" | "backspace" | "escape" | "toggleMode" };
+  | { kind: "enter" | "shiftEnter" | "backspace" | "escape" | "toggleMode" }
+  | { kind: "left" | "right" | "syllableLeft" | "syllableRight" | "end" }
+  | { kind: "down" | "up" | "pageDown" | "pageUp" };
 
 /** `KeyboardEvent` 裡這個模組會用到的欄位。 */
 export interface KeyPress {
@@ -42,9 +44,15 @@ function charForCode(code: string): string | undefined {
   return CODE_TO_CHAR[code];
 }
 
-/** 把鍵盤事件翻成抽象按鍵；引擎不需要知道的按鍵（方向鍵、快速鍵等）回傳 `null`。 */
+/** 把鍵盤事件翻成抽象按鍵；引擎不需要知道的按鍵（快速鍵、功能鍵等）回傳 `null`。 */
 export function toEngineKey(press: KeyPress): EngineKey | null {
-  if (press.ctrlKey || press.altKey || press.metaKey) return null;
+  if (press.altKey || press.metaKey) return null;
+  if (press.ctrlKey) {
+    // Ctrl 的組合鍵裡，引擎只認「游標一次移一個音節」，其餘快速鍵照常交給瀏覽器。
+    if (press.code === "ArrowLeft") return { kind: "syllableLeft" };
+    if (press.code === "ArrowRight") return { kind: "syllableRight" };
+    return null;
+  }
   switch (press.code) {
     case "Enter":
     case "NumpadEnter":
@@ -55,6 +63,20 @@ export function toEngineKey(press: KeyPress): EngineKey | null {
       return { kind: "escape" };
     case "CapsLock":
       return { kind: "toggleMode" };
+    case "ArrowLeft":
+      return { kind: "left" };
+    case "ArrowRight":
+      return { kind: "right" };
+    case "End":
+      return { kind: "end" };
+    case "ArrowDown":
+      return { kind: "down" };
+    case "ArrowUp":
+      return { kind: "up" };
+    case "PageDown":
+      return { kind: "pageDown" };
+    case "PageUp":
+      return { kind: "pageUp" };
   }
   const ch = charForCode(press.code);
   if (ch === undefined) return null;

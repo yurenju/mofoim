@@ -106,7 +106,7 @@ fn a_full_composition_stays_fast() {
         let started = std::time::Instant::now();
         let snapshot = engine.handle_key(Key::Char(key));
         slowest = slowest.max(started.elapsed().as_secs_f64() * 1000.0);
-        assert!(snapshot.cells.len() <= 50);
+        assert!(snapshot.text().chars().count() <= 50);
         sent.push_str(&snapshot.committed);
     }
     sent.push_str(&engine.snapshot().text());

@@ -26,10 +26,38 @@ describe("toEngineKey", () => {
     expect(press("CapsLock")).toEqual({ kind: "toggleMode" });
   });
 
+  it("方向鍵與 End 移動游標", () => {
+    expect(press("ArrowLeft")).toEqual({ kind: "left" });
+    expect(press("ArrowRight")).toEqual({ kind: "right" });
+    expect(press("End")).toEqual({ kind: "end" });
+  });
+
+  it("Ctrl 加左右鍵一次移一個音節", () => {
+    expect(press("ArrowLeft", { ctrlKey: true })).toEqual({ kind: "syllableLeft" });
+    expect(press("ArrowRight", { ctrlKey: true })).toEqual({ kind: "syllableRight" });
+  });
+
+  it("上下鍵與翻頁鍵交給引擎的選字狀態", () => {
+    expect(press("ArrowDown")).toEqual({ kind: "down" });
+    expect(press("ArrowUp")).toEqual({ kind: "up" });
+    expect(press("PageDown")).toEqual({ kind: "pageDown" });
+    expect(press("PageUp")).toEqual({ kind: "pageUp" });
+  });
+
+  it("空白鍵和數字鍵永遠是字元鍵，要不要當成選字由引擎決定", () => {
+    expect(press("Space")).toEqual({ kind: "char", ch: " " });
+    expect(press("Digit1")).toEqual({ kind: "char", ch: "1" });
+    expect(press("Digit0")).toEqual({ kind: "char", ch: "0" });
+  });
+
   it("不攔截快速鍵和引擎用不到的按鍵", () => {
     expect(press("KeyC", { ctrlKey: true })).toBeNull();
     expect(press("KeyV", { metaKey: true })).toBeNull();
-    expect(press("ArrowLeft")).toBeNull();
+    expect(press("ArrowDown", { ctrlKey: true })).toBeNull();
+    expect(press("End", { ctrlKey: true })).toBeNull();
+    expect(press("ArrowLeft", { altKey: true })).toBeNull();
+    expect(press("ArrowLeft", { metaKey: true })).toBeNull();
+    expect(press("Home")).toBeNull();
     expect(press("F5")).toBeNull();
   });
 });
@@ -41,5 +69,6 @@ describe("plainText", () => {
     expect(plainText({ kind: "shift", ch: "1" })).toBe("!");
     expect(plainText({ kind: "shift", ch: "/" })).toBe("?");
     expect(plainText({ kind: "enter" })).toBe("");
+    expect(plainText({ kind: "left" })).toBe("");
   });
 });

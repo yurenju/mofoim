@@ -7,10 +7,12 @@
   --border: #d5d3cc;
   --accent: #0b6e4f;
   --accent-soft: #dcefe6;
-  --pinned: #7a4b00;
-  --pinned-soft: #fbe9c6;
+  --zhuyin: #1d4ed8;
+  --after: #6b7280;
+  --after-line: #9ca3af;
+  --corrected: #c2410c;
+  --highlight: #dce6ff;
   --raw: #9a3324;
-  --raw-soft: #fbe3de;
   --english: #1d4f91;
   font-family: "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", system-ui, sans-serif;
   line-height: 1.6;
@@ -25,10 +27,12 @@
     --border: #363b42;
     --accent: #5fd0a5;
     --accent-soft: #173a2e;
-    --pinned: #f2c36b;
-    --pinned-soft: #43330f;
+    --zhuyin: #8db8f5;
+    --after: #8a93a0;
+    --after-line: #5c6470;
+    --corrected: #fb923c;
+    --highlight: #26375c;
     --raw: #ff9a8a;
-    --raw-soft: #47201a;
     --english: #8db8f5;
   }
 }
@@ -147,41 +151,49 @@ button:hover {
   outline-offset: 1px;
 }
 
-.cell {
-  border-bottom: 2px solid var(--accent);
-  padding: 2px 0;
+/* 釘住的段：漢字，實線底。 */
+.pinned {
+  border-bottom: 2px solid var(--text);
 }
 
-.cell.guess,
-.cell.pinned {
-  cursor: pointer;
+/* 釘住的段和後面的注音之間留一點空隙。 */
+.gap {
+  display: inline-block;
+  width: 6px;
 }
 
-.cell.guess:hover,
-.cell.pinned:hover {
-  background: var(--accent-soft);
+/* 還沒釘住的按鍵：照實際按的鍵顯示成注音，點線底。 */
+.zhuyin {
+  font-size: 0.82em;
+  color: var(--zhuyin);
 }
 
-.cell.pinned {
-  border-bottom-color: var(--pinned);
-  background: var(--pinned-soft);
+.zhuyin.after {
+  color: var(--after);
 }
 
-.cell.raw {
-  border-bottom-color: var(--raw);
-  color: var(--raw);
-  background: var(--raw-soft);
+/* 一個音節不會被換行拆開；一聲是空格，要保留它的寬度游標才看得出有移動。 */
+.syllable {
+  display: inline-block;
+  line-height: 1.5;
+  white-space: pre;
+  border-bottom: 2px dotted var(--zhuyin);
 }
 
-.cell.literal {
-  border-bottom-style: dotted;
+.zhuyin.after .syllable {
+  border-bottom-color: var(--after-line);
+}
+
+/* 空隙放在音節外面，底線才會一個音節一段。游標緊貼著它前後的音節。 */
+.syllable + .syllable {
+  margin-left: 5px;
 }
 
 .caret {
   display: inline-block;
   width: 2px;
   height: 1.2em;
-  margin-left: 1px;
+  margin: 0 1px;
   vertical-align: text-bottom;
   background: transparent;
 }
@@ -200,22 +212,28 @@ button:hover {
 .candidates {
   position: absolute;
   z-index: 1;
-  margin: 0;
-  padding: 4px;
-  list-style: none;
-  max-height: 260px;
-  min-width: 96px;
-  overflow-y: auto;
+  /* 夠寬才不會因為下方的提示文字換了而改變寬度。 */
+  min-width: 300px;
+  max-width: 100%;
+  overflow: hidden;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 8px;
-  box-shadow: 0 6px 20px rgb(0 0 0 / 0.18);
+  border-radius: 10px;
+  box-shadow: 0 8px 22px rgb(0 0 0 / 0.14);
+}
+
+.candidates ul {
+  margin: 0;
+  padding: 6px;
+  list-style: none;
 }
 
 .candidates button {
   display: flex;
+  align-items: center;
   gap: 8px;
   width: 100%;
+  padding: 5px 8px;
   border: 0;
   background: none;
   font-size: 1.125rem;
@@ -227,11 +245,35 @@ button:hover {
   background: var(--accent-soft);
 }
 
+.candidates button.on {
+  background: var(--highlight);
+}
+
+/* 編號的位置固定寬度：打字狀態下是空的，進入選字狀態才有數字，版面不會跳。 */
 .candidates .number {
-  width: 1em;
+  flex: none;
+  width: 12px;
   color: var(--muted);
-  font-size: 0.875rem;
-  font-variant-numeric: tabular-nums;
+  font: 600 0.6875rem ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+
+.candidates .text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.candidates .corrected {
+  border-bottom: 3px dashed var(--corrected);
+}
+
+.candidate-hint {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 12px;
+  padding: 6px 10px;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 0.75rem;
 }
 
 .legend {
@@ -251,17 +293,19 @@ button:hover {
   height: 0.9em;
   margin-right: 6px;
   vertical-align: -1px;
-  border-bottom: 2px solid var(--accent);
+  border-bottom: 2px solid var(--text);
 }
 
-.swatch.pinned {
-  border-bottom-color: var(--pinned);
-  background: var(--pinned-soft);
+.swatch.zhuyin {
+  border-bottom: 2px dotted var(--zhuyin);
 }
 
-.swatch.raw {
-  border-bottom-color: var(--raw);
-  background: var(--raw-soft);
+.swatch.after {
+  border-bottom: 2px dotted var(--after-line);
+}
+
+.swatch.corrected {
+  border-bottom: 3px dashed var(--corrected);
 }
 
 .shortcuts {

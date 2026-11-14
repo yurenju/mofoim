@@ -1,121 +1,113 @@
-//! 引擎行為測試：手動選字與釘住、英文模式、原樣送出、標點。
+//! 引擎行為測試：候選字與釘住、英文模式、原樣送出、標點。
 
 mod common;
 
-use common::{engine, type_keys};
-use mofoim_engine::{CellKind, Engine, Key, Mode};
-
-fn kinds(engine: &Engine) -> Vec<CellKind> {
-    engine.snapshot().cells.iter().map(|c| c.kind).collect()
-}
-
-/// 把第 `cell` 格釘住成候選字詞 `word`。
-fn pin(engine: &mut Engine, cell: usize, word: &str) -> mofoim_engine::Snapshot {
-    let index = engine.candidates(cell).iter().position(|c| c == word);
-    engine.pin(cell, index.unwrap_or_else(|| panic!("候選字詞裡沒有「{word}」")))
-}
+use common::{candidates, engine, pin, shown, type_keys};
+use mofoim_engine::{Key, Mode};
 
 // ---- 候選字與釘住 ----
 
 #[test]
 fn candidates_list_same_sounding_characters_most_likely_first() {
-    let mut engine = engine();
-    type_keys(&mut engine, "hk4");
-    assert_eq!(engine.candidates(0)[..3], ["測", "側", "冊"]);
+    let snapshot = type_keys(&mut engine(), "hk4");
+    assert_eq!(candidates(&snapshot)[..3], ["測", "側", "冊"]);
 }
 
 #[test]
-fn candidates_offer_longer_words_before_single_characters() {
-    let mut engine = engine();
-    type_keys(&mut engine, "hk4g4");
-    assert_eq!(engine.candidates(0)[..2], ["測試", "測"]);
-    assert_eq!(engine.candidates(1)[..3], ["是", "事", "試"]);
+fn the_first_candidate_is_the_whole_sentence_and_the_rest_are_shorter_prefixes() {
+    let snapshot = type_keys(&mut engine(), "hk4g4");
+    assert_eq!(candidates(&snapshot)[..4], ["測試", "測", "側", "冊"]);
+    let snapshot = type_keys(&mut engine(), "u 1p3g.3hk4");
+    assert_eq!(candidates(&snapshot)[..2], ["一本手冊", "一"]);
 }
 
 #[test]
 fn candidates_include_neighboring_key_readings_after_the_literal_ones() {
-    let mut engine = engine();
     // hl3 照字面是「草」。把 l、3 當成按錯的 k、4 就是 ㄘㄜˋ（測、側、冊）；
     // 把 h、l 當成按錯的 g、. 就是 ㄕㄡˇ（手、首）。這些排在照字面的讀法後面。
-    type_keys(&mut engine, "hl3");
-    assert_eq!(engine.candidates(0), ["草", "手", "測", "首", "側", "冊"]);
+    let snapshot = type_keys(&mut engine(), "hl3");
+    assert_eq!(candidates(&snapshot), ["草", "手", "測", "首", "側", "冊"]);
 }
 
 #[test]
-fn pinning_replaces_the_guess_and_reports_what_was_pinned() {
+fn nothing_typed_means_no_candidates() {
+    assert!(engine().snapshot().candidates.is_empty());
+}
+
+#[test]
+fn pinning_turns_the_keys_into_the_chosen_word_and_reports_it() {
     let mut engine = engine();
     type_keys(&mut engine, "hk4");
-    let snapshot = pin(&mut engine, 0, "冊");
+    let snapshot = pin(&mut engine, "冊");
+    assert_eq!(shown(&snapshot), "[冊]|");
     assert_eq!(snapshot.text(), "冊");
-    assert_eq!(snapshot.cells[0].kind, CellKind::Pinned);
-    assert_eq!(snapshot.pinned.as_deref(), Some("冊"));
+    assert_eq!(snapshot.newly_pinned.as_deref(), Some("冊"));
+    assert!(snapshot.candidates.is_empty(), "沒有還沒釘住的按鍵，就沒有候選字");
 }
 
 #[test]
-fn a_pinned_cell_is_not_changed_by_later_keys() {
+fn after_pinning_a_prefix_the_remaining_keys_keep_being_guessed() {
+    let mut engine = engine();
+    type_keys(&mut engine, "g.3hk4g4");
+    let snapshot = pin(&mut engine, "手");
+    assert_eq!(shown(&snapshot), "[手]ㄘㄜˋ·ㄕˋ|");
+    assert_eq!(candidates(&snapshot)[..4], ["測試", "測", "側", "冊"]);
+    assert_eq!(snapshot.text(), "手測試");
+}
+
+#[test]
+fn a_pinned_segment_is_not_changed_by_later_keys() {
     let mut engine = engine();
     type_keys(&mut engine, "hk4");
-    pin(&mut engine, 0, "冊");
+    pin(&mut engine, "冊");
     // 沒釘住的話，後面接 ㄕˋ 會整個變成「測試」。
-    assert_eq!(type_keys(&mut engine, "g4").text(), "冊是");
-    assert_eq!(kinds(&engine), [CellKind::Pinned, CellKind::Guess]);
+    let snapshot = type_keys(&mut engine, "g4");
+    assert_eq!(shown(&snapshot), "[冊]ㄕˋ|");
+    assert_eq!(snapshot.text(), "冊是");
 }
 
 #[test]
-fn unpinned_cells_still_follow_the_context_around_a_pin() {
+fn keys_after_a_pinned_segment_are_guessed_with_it_as_context() {
     let mut engine = engine();
-    type_keys(&mut engine, "u 1p3gj ");
-    assert_eq!(engine.snapshot().text(), "一本書");
-    pin(&mut engine, 2, "輸");
-    assert_eq!(engine.snapshot().text(), "一本輸");
-    assert_eq!(kinds(&engine), [CellKind::Guess, CellKind::Guess, CellKind::Pinned]);
-}
-
-#[test]
-fn pinning_one_character_of_a_word_splits_the_word() {
-    let mut engine = engine();
-    type_keys(&mut engine, "hk4g4");
-    assert_eq!(pin(&mut engine, 1, "事").text(), "測事");
-}
-
-#[test]
-fn pinning_a_word_covers_all_its_characters() {
-    let mut engine = engine();
-    type_keys(&mut engine, "hk4g4");
-    pin(&mut engine, 1, "事");
-    assert_eq!(pin(&mut engine, 0, "測試").text(), "測試");
-    assert_eq!(kinds(&engine), [CellKind::Pinned, CellKind::Pinned]);
+    assert_eq!(type_keys(&mut engine, "g.3hl3").text(), "手草");
+    engine.handle_key(Key::Escape);
+    // 同樣的按鍵接在釘住的「本」後面，「手冊」比「手草」合理。
+    type_keys(&mut engine, "1p3");
+    pin(&mut engine, "本");
+    assert_eq!(type_keys(&mut engine, "g.3hl3").text(), "本手冊");
 }
 
 #[test]
 fn the_user_can_pin_the_neighboring_key_reading() {
     let mut engine = engine();
     type_keys(&mut engine, "hl3");
-    assert_eq!(pin(&mut engine, 0, "冊").text(), "冊");
+    assert_eq!(pin(&mut engine, "冊").text(), "冊");
 }
 
 #[test]
-fn deleting_into_a_pinned_cell_removes_the_pin() {
-    let mut engine = engine();
-    type_keys(&mut engine, "hk4");
-    pin(&mut engine, 0, "冊");
-    assert_eq!(engine.handle_key(Key::Backspace).text(), "ㄘㄜ");
-    assert_eq!(type_keys(&mut engine, "4").text(), "測");
-    assert_eq!(kinds(&engine), [CellKind::Guess]);
-}
-
-#[test]
-fn cells_that_are_not_characters_have_no_candidates() {
+fn pinning_the_whole_sentence_guess_pins_everything_before_the_cursor() {
     let mut engine = engine();
     type_keys(&mut engine, "ji3h");
+    assert_eq!(shown(&engine.pin(0)), "[我ㄘ]|");
+}
+
+#[test]
+fn leading_punctuation_can_be_pinned_on_its_own() {
+    let mut engine = engine();
     engine.handle_key(Key::Shift(','));
-    assert_eq!(engine.snapshot().text(), "我ㄘ，");
-    assert!(engine.candidates(1).is_empty(), "注音符號");
-    assert!(engine.candidates(2).is_empty(), "標點");
-    assert!(engine.candidates(9).is_empty(), "不存在的位置");
-    let snapshot = engine.pin(1, 0);
+    let snapshot = type_keys(&mut engine, "hk4");
+    assert_eq!(candidates(&snapshot), ["，測", "，"]);
+    assert_eq!(candidates(&pin(&mut engine, "，"))[..3], ["測", "側", "冊"]);
+}
+
+#[test]
+fn pinning_a_candidate_that_does_not_exist_does_nothing() {
+    let mut engine = engine();
+    type_keys(&mut engine, "hk4");
+    let snapshot = engine.pin(99);
     assert!(!snapshot.handled);
-    assert_eq!(snapshot.pinned, None);
+    assert_eq!(snapshot.newly_pinned, None);
+    assert_eq!(shown(&snapshot), "ㄘㄜˋ|");
 }
 
 // ---- 英文模式 ----
@@ -143,13 +135,13 @@ fn english_letters_join_the_composition_as_typed() {
 }
 
 #[test]
-fn english_letters_are_shown_as_literal_cells() {
+fn english_letters_are_shown_as_typed_in_the_editing_area() {
     let mut engine = engine();
     type_keys(&mut engine, "ji3");
     engine.handle_key(Key::ToggleMode);
     type_keys(&mut engine, "hk4");
     assert_eq!(engine.snapshot().text(), "我hk4");
-    assert_eq!(kinds(&engine)[1..], [CellKind::Literal; 3]);
+    assert_eq!(shown(&engine.snapshot()), "ㄨㄛˇ·hk4|");
 }
 
 #[test]
@@ -159,7 +151,7 @@ fn english_mode_leaves_keys_alone_when_nothing_is_being_composed() {
     for key in [Key::Char('h'), Key::Shift('h'), Key::Char(' '), Key::Char('1')] {
         let snapshot = engine.handle_key(key);
         assert!(!snapshot.handled, "{key:?}");
-        assert!(snapshot.cells.is_empty());
+        assert!(snapshot.is_empty());
     }
 }
 
@@ -212,7 +204,7 @@ fn raw_send_gives_back_the_keys_as_english() {
     type_keys(&mut engine, "hello");
     let snapshot = engine.handle_key(Key::ShiftEnter);
     assert_eq!(snapshot.committed, "hello");
-    assert!(snapshot.cells.is_empty());
+    assert!(snapshot.is_empty());
 }
 
 #[test]
@@ -225,9 +217,10 @@ fn raw_send_keeps_capitals_spaces_and_shifted_symbols() {
 }
 
 #[test]
-fn raw_send_ignores_pins_and_guesses() {
+fn raw_send_ignores_pins_guesses_and_the_cursor() {
     let mut engine = engine();
-    type_keys(&mut engine, "hk4");
-    pin(&mut engine, 0, "冊");
-    assert_eq!(engine.handle_key(Key::ShiftEnter).committed, "hk4");
+    type_keys(&mut engine, "hk4g4");
+    pin(&mut engine, "測");
+    engine.handle_key(Key::Left);
+    assert_eq!(engine.handle_key(Key::ShiftEnter).committed, "hk4g4");
 }
