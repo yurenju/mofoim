@@ -1,0 +1,8 @@
+/target
+/data/upstream
+/data/cc0-sentences
+/data/*.dat
+node_modules
+/web/dist
+/web/src/wasm
+/web/public/mofoim.dat
