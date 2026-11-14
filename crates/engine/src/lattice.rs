@@ -14,6 +14,8 @@ const NONE: u32 = u32::MAX;
 /// 一個音節最少與最多由幾個按鍵組成（含聲調鍵）。
 const MIN_SYLLABLE_KEYS: usize = 2;
 const MAX_SYLLABLE_KEYS: usize = 4;
+/// 候選字詞裡，誤觸讀法最多列出幾個。
+const MAX_TYPO_CANDIDATES: usize = 30;
 
 /// 影響猜測結果的參數。分數都是 log10 機率，越接近 0 越好。
 #[derive(Clone, Debug)]
@@ -210,11 +212,18 @@ impl Lattice {
 
     /// 移除最後一個按鍵。
     pub fn pop(&mut self) {
-        if self.strokes.pop().is_some() {
-            self.partials.pop();
-            self.nodes.pop();
-            let len = self.strokes.len();
-            self.pins.retain(|pin| pin.end <= len);
+        if self.strokes.pop().is_none() {
+            return;
+        }
+        self.partials.pop();
+        self.nodes.pop();
+        let len = self.strokes.len();
+        if self.pins.iter().any(|pin| pin.end > len) {
+            // 刪到釘住的那一段時，釘子跟著消失；先前在釘子限制下算出的結果要重算。
+            let mut pins = std::mem::take(&mut self.pins);
+            pins.retain(|pin| pin.end <= len);
+            let strokes = std::mem::take(&mut self.strokes);
+            self.rebuild(strokes, pins);
         }
     }
 
@@ -438,28 +447,41 @@ impl Lattice {
         segments
     }
 
-    /// 從位置 `start` 開始可以選的所有字詞。
-    /// 沒有誤觸的排前面，其次是比較長的詞，再來是比較常見的詞。
+    /// 從位置 `start` 開始可以選的字詞。
+    ///
+    /// 排序：照字面讀法的多字詞最前面（長的優先），其餘依可能性排列，
+    /// 所以照字面讀法的字通常排在誤觸讀法的字前面。誤觸讀法的數量很多，只留最可能的一批。
     pub fn candidates(&self, start: usize) -> Vec<Candidate> {
-        let mut found: Vec<Candidate> = Vec::new();
+        let mut found: Vec<(Candidate, f32)> = Vec::new();
         for end in start + MIN_SYLLABLE_KEYS..=self.strokes.len() {
             for partial in self.partials[end].iter().filter(|p| p.start as usize == start) {
                 for entry in self.model.entries(partial.node) {
-                    found.push(Candidate { start, end, word: entry.word, typos: partial.typos });
+                    let likelihood = self.model.unigram(entry.word)
+                        + entry.penalty
+                        + self.config.typo_penalty * partial.typos as f32;
+                    let candidate = Candidate { start, end, word: entry.word, typos: partial.typos };
+                    found.push((candidate, likelihood));
                 }
             }
         }
-        let length = |c: &Candidate| self.model.word(c.word).chars().count();
-        found.sort_by(|a, b| {
-            (a.typos > 0)
-                .cmp(&(b.typos > 0))
-                .then(length(b).cmp(&length(a)))
-                .then(a.typos.cmp(&b.typos))
-                .then(self.model.unigram(b.word).total_cmp(&self.model.unigram(a.word)))
-                .then(a.word.cmp(&b.word))
-        });
+        // 同一個詞可能由好幾種讀法得到，留可能性最高的那個。
+        found.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.word.cmp(&b.0.word)));
         let mut seen = HashSet::new();
-        found.retain(|c| seen.insert((c.end, c.word)));
-        found
+        found.retain(|(c, _)| seen.insert((c.end, c.word)));
+
+        let mut typo_readings = 0;
+        found.retain(|(c, _)| {
+            typo_readings += (c.typos > 0) as usize;
+            c.typos == 0 || typo_readings <= MAX_TYPO_CANDIDATES
+        });
+        let length = |c: &Candidate| self.model.word(c.word).chars().count();
+        let exact_word = |c: &Candidate| c.typos == 0 && length(c) > 1;
+        // 排序是穩定的，所以同一組裡仍然照可能性排列。
+        found.sort_by(|(a, _), (b, _)| {
+            exact_word(b).cmp(&exact_word(a)).then_with(|| {
+                if exact_word(a) { length(b).cmp(&length(a)) } else { std::cmp::Ordering::Equal }
+            })
+        });
+        found.into_iter().map(|(candidate, _)| candidate).collect()
     }
 }
