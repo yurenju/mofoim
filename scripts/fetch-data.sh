@@ -2,6 +2,8 @@
 # 下載建置資料檔與準確率測試所需的上游資料，並固定在特定版本。
 # 需要 git 與 git-lfs。
 set -euo pipefail
+# data/ 裡的東西都不在版本控制裡，全新 clone 下來時這個資料夾還不存在。
+mkdir -p "$(dirname "$0")/../data"
 cd "$(dirname "$0")/../data"
 
 CHEWING_REV=1164cb4ed5fc498ae2f87b40e8b5a35a7afd1e8e
