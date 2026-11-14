@@ -1,0 +1,9 @@
+[package]
+name = "mofoim-accuracy"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "準確率測試：模擬打字（可加入誤觸）並量測引擎猜對的比例"
+
+[dependencies]
+mofoim-engine = { path = "../engine" }
