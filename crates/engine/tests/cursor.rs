@@ -171,8 +171,8 @@ fn down_enters_the_selecting_state_and_escape_leaves_it() {
 
 #[test]
 fn entering_the_selecting_state_highlights_the_only_candidate_when_there_is_just_one() {
-    let mut engine = engine();
-    // ㄘㄜ 還沒打完，只有整句猜測這一個候選字。
+    let mut engine = common::toned_engine();
+    // 聲調一定要打時，ㄘㄜ 還沒打完，只有整句猜測這一個候選字。
     assert_eq!(type_keys(&mut engine, "hk").candidates.len(), 1);
     assert_eq!(engine.handle_key(Key::Down).highlighted, Some(0));
 }

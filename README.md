@@ -1,6 +1,7 @@
 # mofoim
 
 mofoim 是一個會容錯的注音輸入法：按到隔壁鍵時，它依前後文猜出你原本想打的句子。
+聲調可以不打，由它依前後文猜；同音字太多猜不準的地方，再補上聲調就好。
 完全在本機執行，不需要網路。
 
 目前有引擎和網頁版的展示頁面；Windows 與 macOS 的輸入法是之後的工作。
@@ -74,7 +75,7 @@ npm --prefix web test
 npm --prefix web run typecheck
 ```
 
-印出準確率報告（可以用 `--penalty`、`--max-typos`、`--typo-rate` 試不同的參數）：
+印出準確率報告（可以用 `--penalty`、`--max-typos`、`--typo-rate`、`--toneless-penalty`、`--toneless-rate`、`--require-tones` 試不同的參數，`--show-misses 20` 列出不打聲調時猜錯的句子）：
 
 ```bash
 cargo run --release -p mofoim-accuracy

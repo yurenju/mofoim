@@ -14,6 +14,9 @@ const NONE: u32 = u32::MAX;
 /// 一個音節最少與最多由幾個按鍵組成（含聲調鍵）。
 const MIN_SYLLABLE_KEYS: usize = 2;
 const MAX_SYLLABLE_KEYS: usize = 4;
+/// 不打聲調時，一個音節最少與最多由幾個按鍵組成。
+const MIN_TONELESS_KEYS: usize = 1;
+const MAX_TONELESS_KEYS: usize = 3;
 /// 候選字詞裡，誤觸讀法最多列出幾個。
 const MAX_TYPO_CANDIDATES: usize = 30;
 
@@ -37,6 +40,14 @@ pub struct Config {
     pub beam: usize,
     /// 編輯區最多幾個字，超過時最前面的部分會自動送出。
     pub max_cells: usize,
+    /// 每個沒打聲調的音節扣幾分；`None` 代表聲調一定要打（見 ADR 0005）。
+    /// 沒有聲調鍵的音節會被當成「任何一個聲調都有可能」，扣一點分讓有打聲調的讀法優先。
+    /// 這個數值是用準確率測試調出來的：扣太多會猜不出沒打聲調的句子，
+    /// 扣太少則會把「打了聲調但有誤觸」的句子誤認成沒打聲調。
+    pub toneless_penalty: Option<f32>,
+    /// 沒打聲調的音節裡最多容許幾次誤觸。容許 2 次的準確率和 1 次幾乎一樣，但慢很多。
+    /// 只有一個符號的音節一律不容錯。
+    pub max_typos_per_toneless_syllable: u8,
 }
 
 impl Default for Config {
@@ -50,6 +61,8 @@ impl Default for Config {
             words_per_typo_span: 10,
             beam: 80,
             max_cells: 50,
+            toneless_penalty: Some(-0.5),
+            max_typos_per_toneless_syllable: 1,
         }
     }
 }
@@ -95,7 +108,7 @@ pub struct Candidate {
     pub typos: u8,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum NodeKind {
     Start,
     Word,
@@ -104,7 +117,7 @@ enum NodeKind {
 }
 
 /// 一條「結束在某個位置」的路徑的最後一段。
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 struct Node {
     start: u32,
     /// 前一段是 `nodes[start]` 裡的第幾個。
@@ -117,7 +130,7 @@ struct Node {
 }
 
 /// 讀音樹上走到一半的進度：從 `start` 開始的按鍵，目前讀到 `node`。
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 struct Partial {
     start: u32,
     /// 最後一個音節從哪裡開始。
@@ -126,6 +139,10 @@ struct Partial {
     parent: u32,
     node: u32,
     typos: u8,
+    /// 從詞的開頭累計，有幾個音節沒打聲調。
+    toneless: u8,
+    /// 最後一個音節沒打聲調，所以它在哪裡結束並不確定。
+    open: bool,
 }
 
 pub struct Lattice {
@@ -170,18 +187,22 @@ impl Lattice {
         &self.strokes
     }
 
-    fn reset(&mut self) {
-        self.strokes.clear();
-        self.partials = vec![Vec::new()];
-        self.nodes = vec![vec![Node {
+    /// 路徑的起點。它帶著前文的詞，之後算分數時第一個詞就會自動參考它。
+    fn start_node(&self) -> Node {
+        Node {
             start: 0,
             back: NONE,
             kind: NodeKind::Start,
-            // 起點帶著前文的詞，之後算分數時第一個詞就會自動參考它。
             word: self.context,
             partial: NONE,
             score: 0.0,
-        }]];
+        }
+    }
+
+    fn reset(&mut self) {
+        self.strokes.clear();
+        self.partials = vec![Vec::new()];
+        self.nodes = vec![vec![self.start_node()]];
     }
 
     /// 清空按鍵序列與前文。
@@ -207,22 +228,143 @@ impl Lattice {
         }
     }
 
+    /// 丟掉最前面 `keys` 個按鍵（它們已經送出或釘住），結果和用剩下的按鍵 [`Lattice::rebuild`] 一樣。
+    /// `context` 是被丟掉的那一段的最後一個詞。
+    ///
+    /// 按鍵有哪些讀法和前文無關，所以讀音樹上的進度可以留下來用，只有分數要重算，
+    /// 比整個重算快得多。編輯區滿了之後每打一個字都會走到這裡。
+    pub fn drop_prefix(&mut self, keys: usize, context: Option<u32>) {
+        let shift = keys as u32;
+        self.strokes.drain(..keys);
+        let old = std::mem::take(&mut self.partials);
+        // 留下從剩餘按鍵開始的進度。它們在清單裡的編號會變，`parent` 要跟著改。
+        let mut renumbered: Vec<Vec<u32>> = Vec::new();
+        for list in old.into_iter().skip(keys) {
+            let mut numbers = vec![NONE; list.len()];
+            let mut kept = Vec::new();
+            for (index, partial) in list.into_iter().enumerate() {
+                if partial.start < shift {
+                    continue;
+                }
+                numbers[index] = kept.len() as u32;
+                let syllable_start = partial.syllable_start - shift;
+                let parent = match partial.parent {
+                    NONE => NONE,
+                    parent => renumbered[syllable_start as usize][parent as usize],
+                };
+                kept.push(Partial { start: partial.start - shift, syllable_start, parent, ..partial });
+            }
+            renumbered.push(numbers);
+            self.partials.push(kept);
+        }
+        self.context = context.unwrap_or(NONE);
+        self.nodes.clear();
+        self.nodes.push(vec![self.start_node()]);
+        for end in 1..=self.strokes.len() {
+            let nodes = self.nodes_at(end);
+            self.nodes.push(nodes);
+        }
+    }
+
     /// 加入一個按鍵，算出所有結束在新位置的解讀。
     pub fn push(&mut self, stroke: Stroke) {
         self.strokes.push(stroke);
         let end = self.strokes.len();
+        let partials = self.partials_at(end);
+        self.partials.push(partials);
+        let nodes = self.nodes_at(end);
+        self.nodes.push(nodes);
+    }
+
+    /// 讀音樹上所有「結束在位置 `end`」的進度。只看按鍵，和前文、分數都無關。
+    fn partials_at(&self, end: usize) -> Vec<Partial> {
         let mut partials: Vec<Partial> = Vec::new();
+        if matches!(self.strokes[end - 1], Stroke::Literal(_)) {
+            return partials;
+        }
+        // 把最後幾個按鍵當成一個音節，接到讀音樹的進度上。有聲調的音節是 2 到 4 個按鍵；
+        // 允許不打聲調時，再把最後 1 到 3 個按鍵當成沒有聲調的音節試一次。
+        let shapes = [
+            (true, MIN_SYLLABLE_KEYS..=MAX_SYLLABLE_KEYS),
+            (false, MIN_TONELESS_KEYS..=MAX_TONELESS_KEYS),
+        ];
+        let mut syllables = Vec::new();
+        let mut extendable: Vec<(usize, &Partial)> = Vec::new();
+        for (has_tone, lengths) in shapes {
+            if !has_tone && self.config.toneless_penalty.is_none() {
+                continue;
+            }
+            let missing_tone = !has_tone as u8;
+            for len in lengths {
+                if len > end || matches!(self.strokes[end - len], Stroke::Literal(_)) {
+                    break;
+                }
+                let start = end - len;
+                syllables.clear();
+                self.interpret(start, end, has_tone, &mut syllables);
+                // 大部分的進度已經讀到詞的結尾，後面接不了任何音節，先濾掉。
+                let earlier = self.partials[start].iter().enumerate();
+                extendable.clear();
+                extendable.extend(earlier.filter(|(_, p)| self.model.has_children(p.node)));
+                for &(syllable, typos) in &syllables {
+                    for &node in self.model.children(0, syllable) {
+                        partials.push(Partial {
+                            start: start as u32,
+                            syllable_start: start as u32,
+                            parent: NONE,
+                            node,
+                            typos,
+                            toneless: missing_tone,
+                            open: !has_tone,
+                        });
+                    }
+                    for &(index, earlier) in &extendable {
+                        let total = earlier.typos + typos;
+                        if total > self.config.max_typos_per_word {
+                            continue;
+                        }
+                        for &node in self.model.children(earlier.node, syllable) {
+                            partials.push(Partial {
+                                start: earlier.start,
+                                syllable_start: start as u32,
+                                parent: index as u32,
+                                node,
+                                typos: total,
+                                toneless: earlier.toneless + missing_tone,
+                                open: !has_tone,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        partials
+    }
+
+    /// 所有「結束在位置 `end`」的路徑，分數高的排前面，最多 `beam` 條。
+    /// 位置 `end` 的進度和它之前的路徑都要先算好。
+    fn nodes_at(&self, end: usize) -> Vec<Node> {
+        let stroke = self.strokes[end - 1];
         let mut nodes: Vec<Node> = Vec::new();
 
         // 只吃掉這一個按鍵的解讀：原樣字元，或猜不出來的注音鍵。
-        if let Some(best) = self.nodes[end - 1].first() {
+        let previous = &self.nodes[end - 1];
+        // 使用者打了聲調，前一個音節就不該被當成沒打聲調；後面接著韻母的聲母也不該自己成一個字。
+        // 所以猜不出來的按鍵如果看起來還屬於前一個音節，就不接在「最後一個音節沒打聲調」
+        // 的詞後面，除非沒有別的路徑可以接。
+        let continues = self.continues_syllable(end - 1);
+        let open = |node: &Node| {
+            node.kind == NodeKind::Word && self.partials[end - 1][node.partial as usize].open
+        };
+        let back = previous.iter().position(|node| !(continues && open(node))).unwrap_or(0);
+        if let Some(best) = previous.get(back) {
             let (kind, penalty) = match stroke {
                 Stroke::Literal(_) => (NodeKind::Literal, 0.0),
                 Stroke::Zhuyin(_) => (NodeKind::Raw, self.config.raw_penalty),
             };
             nodes.push(Node {
                 start: end as u32 - 1,
-                back: 0,
+                back: back as u32,
                 kind,
                 word: NONE,
                 partial: NONE,
@@ -230,92 +372,103 @@ impl Lattice {
             });
         }
 
-        if matches!(stroke, Stroke::Zhuyin(_)) {
-            // 把最後 2 到 4 個按鍵當成一個音節，接到讀音樹的進度上。
-            let mut syllables = Vec::new();
-            for len in MIN_SYLLABLE_KEYS..=MAX_SYLLABLE_KEYS {
-                if len > end || matches!(self.strokes[end - len], Stroke::Literal(_)) {
-                    break;
-                }
-                let start = end - len;
-                syllables.clear();
-                self.interpret(start, end, &mut syllables);
-                for &(syllable, typos) in &syllables {
-                    if let Some(node) = self.model.child(0, syllable) {
-                        partials.push(Partial {
-                            start: start as u32,
-                            syllable_start: start as u32,
-                            parent: NONE,
-                            node,
-                            typos,
-                        });
-                    }
-                    for (index, earlier) in self.partials[start].iter().enumerate() {
-                        let total = earlier.typos + typos;
-                        if total > self.config.max_typos_per_word {
-                            continue;
-                        }
-                        if let Some(node) = self.model.child(earlier.node, syllable) {
-                            partials.push(Partial {
-                                start: earlier.start,
-                                syllable_start: start as u32,
-                                parent: index as u32,
-                                node,
-                                typos: total,
-                            });
-                        }
-                    }
-                }
+        // 每個讀完的進度對應到一批詞，各自接上分數最高的前一段。
+        for (index, partial) in self.partials[end].iter().enumerate() {
+            let previous = &self.nodes[partial.start as usize];
+            let entries = self.model.entries(partial.node);
+            if previous.is_empty() || entries.is_empty() {
+                continue;
             }
-
-            // 每個讀完的進度對應到一批詞，各自接上分數最高的前一段。
-            for (index, partial) in partials.iter().enumerate() {
-                let start = partial.start as usize;
-                let previous = &self.nodes[start];
-                let entries = self.model.entries(partial.node);
-                if previous.is_empty() || entries.is_empty() {
-                    continue;
-                }
-                let limit = if partial.typos == 0 {
-                    self.config.words_per_span
-                } else {
-                    self.config.words_per_typo_span
-                };
-                let typo_cost = self.config.typo_penalty * partial.typos as f32;
-                for entry in entries.iter().take(limit) {
-                    let mut best = (0u32, f32::NEG_INFINITY);
-                    for (i, node) in previous.iter().enumerate() {
-                        let context = (node.word != NONE).then_some(node.word);
-                        let score = node.score + self.model.score(context, entry.word);
-                        if score > best.1 {
-                            best = (i as u32, score);
-                        }
+            let limit = if partial.typos == 0 && partial.toneless == 0 {
+                self.config.words_per_span
+            } else {
+                self.config.words_per_typo_span
+            };
+            let cost =
+                self.config.typo_penalty * partial.typos as f32 + self.toneless_cost(partial);
+            for entry in entries.iter().take(limit) {
+                let ceiling = self.model.best_score(entry.word);
+                let mut best = (0u32, f32::NEG_INFINITY);
+                for (i, node) in previous.iter().enumerate() {
+                    // 前面的路徑是照分數由高到低排的：這一條就算拿到這個詞的最高分也贏不了，
+                    // 後面的更不可能。
+                    if node.score + ceiling <= best.1 {
+                        break;
                     }
-                    nodes.push(Node {
-                        start: partial.start,
-                        back: best.0,
-                        kind: NodeKind::Word,
-                        word: entry.word,
-                        partial: index as u32,
-                        score: best.1 + entry.penalty + typo_cost,
-                    });
+                    let context = (node.word != NONE).then_some(node.word);
+                    let score = node.score + self.model.score(context, entry.word);
+                    if score > best.1 {
+                        best = (i as u32, score);
+                    }
                 }
+                nodes.push(Node {
+                    start: partial.start,
+                    back: best.0,
+                    kind: NodeKind::Word,
+                    word: entry.word,
+                    partial: index as u32,
+                    score: best.1 + entry.penalty + cost,
+                });
             }
         }
 
         // 分數高的排前面；同一段、同一個詞只留分數最高的那個。
+        // 只需要前面 `beam` 個，湊滿就停，不必把後面幾百個都比對過。
         nodes.sort_by(|a, b| b.score.total_cmp(&a.score));
         let mut seen = HashSet::new();
-        nodes.retain(|n| seen.insert((n.start, n.kind as u8, n.word)));
-        nodes.truncate(self.config.beam);
+        let mut kept = Vec::with_capacity(self.config.beam.min(nodes.len()));
+        for node in nodes {
+            if kept.len() == self.config.beam {
+                break;
+            }
+            if seen.insert((node.start, node.kind as u8, node.word)) {
+                kept.push(node);
+            }
+        }
+        kept
+    }
 
-        self.partials.push(partials);
-        self.nodes.push(nodes);
+    /// 第 `at` 個按鍵照字面看起來還屬於前一個按鍵的音節：它是聲調，
+    /// 或是排在前一個符號後面的介音、韻母。
+    fn continues_syllable(&self, at: usize) -> bool {
+        let slot = |at: usize| match self.strokes.get(at) {
+            Some(Stroke::Zhuyin(key)) => self.layout.symbol(*key).map(|symbol| symbol.slot),
+            _ => None,
+        };
+        match (at.checked_sub(1).and_then(slot), slot(at)) {
+            (Some(last), Some(next)) => next > last,
+            _ => false,
+        }
+    }
+
+    /// 這個進度的最後一個音節沒打聲調，而且緊接在後面的按鍵看起來還屬於同一個音節。
+    /// 整句猜測仍然會考慮這種切法（例如 ㄒㄧㄢ 可以是「西安」），但不拿來當候選字：
+    /// 選了它會把一個音節從中間切開，留下孤立的聲調或韻母。
+    /// 使用者真的要在這裡斷開時，補上聲調就可以。
+    fn ends_mid_syllable(&self, partial: &Partial, end: usize) -> bool {
+        partial.open && self.continues_syllable(end)
+    }
+
+    /// 這個進度裡沒打聲調的音節一共扣幾分。
+    fn toneless_cost(&self, partial: &Partial) -> f32 {
+        self.config.toneless_penalty.unwrap_or(0.0) * partial.toneless as f32
     }
 
     /// 把 `start..end` 的按鍵當成一個音節，列出所有可能的讀法與各自的誤觸次數。
-    fn interpret(&self, start: usize, end: usize, out: &mut Vec<(Syllable, u8)>) {
-        self.interpret_from(start, end, [0; 4], 0, out);
+    /// `has_tone` 是 `false` 時，這些按鍵裡沒有聲調鍵，列出來的是聲調不拘的音節。
+    fn interpret(&self, start: usize, end: usize, has_tone: bool, out: &mut Vec<(Syllable, u8)>) {
+        let config = &self.config;
+        let max_typos = if has_tone {
+            config.max_typos_per_syllable
+        } else if end - start == 1 {
+            // 只有一個符號又沒有聲調的音節不容錯：它的相鄰鍵幾乎都能自己成一個字，
+            // 容錯會讓每個按鍵多出一大批解讀，卻很少真的救回什麼。
+            0
+        } else {
+            // 另有上限，但不會超過一般音節的上限，所以關閉容錯只要改一個設定。
+            config.max_typos_per_toneless_syllable.min(config.max_typos_per_syllable)
+        };
+        self.interpret_from(start, end, has_tone, max_typos, [0; 4], 0, out);
         // 順序不拘時，不同的誤觸組合可能湊出同一個音節，只留誤觸最少的那個。
         out.sort_by_key(|&(syllable, typos)| (syllable, typos));
         out.dedup_by_key(|&mut (syllable, _)| syllable);
@@ -325,33 +478,41 @@ impl Lattice {
         &self,
         at: usize,
         end: usize,
+        has_tone: bool,
+        max_typos: u8,
         parts: [u8; 4],
         typos: u8,
         out: &mut Vec<(Syllable, u8)>,
     ) {
         if at == end {
-            if let Some(syllable) = Syllable::new(parts) {
-                if self.model.is_valid_syllable(syllable) {
-                    out.push((syllable, typos));
-                }
+            // 有聲調鍵時聲調已經確定；沒有時聲調不拘，之後查讀音樹時每個聲調都會查到。
+            let syllable = if has_tone { Syllable::new(parts) } else { Syllable::any_tone(parts) };
+            if let Some(syllable) = syllable.filter(|s| self.model.is_valid_syllable(*s)) {
+                out.push((syllable, typos));
             }
             return;
         }
         let Stroke::Zhuyin(key) = self.strokes[at] else { return };
-        let is_last = at + 1 == end;
+        let expects_tone = has_tone && at + 1 == end;
         let mut consider = |key: char, typos: u8| {
             let Some(symbol) = self.layout.symbol(key) else { return };
             // 只有最後一個鍵是聲調。聲調之前的聲母、介音、韻母不管按的順序，
             // 因為兩手幾乎同時按下時順序常常顛倒；但同一個位置不能有兩個符號。
-            if (symbol.slot == Slot::Tone) != is_last || parts[symbol.slot as usize] != 0 {
+            if (symbol.slot == Slot::Tone) != expects_tone || parts[symbol.slot as usize] != 0 {
+                return;
+            }
+            // 沒有聲調鍵標出字的結尾時，順序顛倒的按鍵很容易被誤認成跨越兩個字的另一種切法，
+            // 所以沒打聲調的音節必須照聲母、介音、韻母的順序。
+            let out_of_order = parts[symbol.slot as usize..].iter().any(|&index| index != 0);
+            if !has_tone && out_of_order {
                 return;
             }
             let mut next = parts;
             next[symbol.slot as usize] = symbol.index;
-            self.interpret_from(at + 1, end, next, typos, out);
+            self.interpret_from(at + 1, end, has_tone, max_typos, next, typos, out);
         };
         consider(key, typos);
-        if typos < self.config.max_typos_per_syllable {
+        if typos < max_typos {
             for &neighbor in self.layout.neighbors(key) {
                 consider(neighbor, typos + 1);
             }
@@ -412,12 +573,16 @@ impl Lattice {
     /// 所以照字面讀法的字通常排在誤觸讀法的字前面。誤觸讀法的數量很多，只留最可能的一批。
     pub fn candidates(&self, start: usize) -> Vec<Candidate> {
         let mut found: Vec<(Candidate, f32)> = Vec::new();
-        for end in start + MIN_SYLLABLE_KEYS..=self.strokes.len() {
+        for end in start + MIN_TONELESS_KEYS..=self.strokes.len() {
             for partial in self.partials[end].iter().filter(|p| p.start as usize == start) {
+                if self.ends_mid_syllable(partial, end) {
+                    continue;
+                }
                 for entry in self.model.entries(partial.node) {
                     let likelihood = self.model.unigram(entry.word)
                         + entry.penalty
-                        + self.config.typo_penalty * partial.typos as f32;
+                        + self.config.typo_penalty * partial.typos as f32
+                        + self.toneless_cost(partial);
                     let candidate = Candidate { start, end, word: entry.word, typos: partial.typos };
                     found.push((candidate, likelihood));
                 }
@@ -442,5 +607,57 @@ impl Lattice {
             })
         });
         found.into_iter().map(|(candidate, _)| candidate).collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::ModelBuilder;
+
+    fn lattice() -> Lattice {
+        let words = [
+            ("一", "ㄧ", -2.0),
+            ("本", "ㄅㄣˇ", -3.0),
+            ("手", "ㄕㄡˇ", -3.3),
+            ("冊", "ㄘㄜˋ", -4.6),
+            ("測", "ㄘㄜˋ", -3.6),
+            ("手冊", "ㄕㄡˇ ㄘㄜˋ", -4.8),
+            ("測試", "ㄘㄜˋ ㄕˋ", -3.9),
+            ("是", "ㄕˋ", -2.0),
+            ("我", "ㄨㄛˇ", -2.2),
+        ];
+        let mut builder = ModelBuilder::new();
+        for (word, reading, probability) in words {
+            assert!(builder.add_entry(word, reading, 0.0));
+            builder.set_unigram(word, probability);
+        }
+        builder.add_bigram("本", "手冊", -0.8);
+        builder.add_bigram("我", "是", -1.0);
+        let model = Model::from_bytes(&builder.build()).unwrap();
+        Lattice::new(Arc::new(model), Layout::dachen(), Config::default())
+    }
+
+    #[test]
+    fn dropping_a_prefix_gives_the_same_lattice_as_rebuilding_the_rest() {
+        // 有聲調、沒聲調、誤觸（hl4、g,）、猜不出來的按鍵（11）和原樣字元（|）都混在一起。
+        let strokes: Vec<Stroke> = "u 1p3g.hk4|ji3g,11hl4g4hkg"
+            .chars()
+            .map(|key| if key == '|' { Stroke::Literal('，') } else { Stroke::Zhuyin(key) })
+            .collect();
+        for cut in 0..=strokes.len() {
+            for context in [None, Some(0)] {
+                let mut dropped = lattice();
+                for &stroke in &strokes {
+                    dropped.push(stroke);
+                }
+                dropped.drop_prefix(cut, context);
+                let mut rebuilt = lattice();
+                rebuilt.rebuild(strokes[cut..].to_vec(), context);
+                assert_eq!(dropped.strokes, rebuilt.strokes, "丟掉 {cut} 個按鍵");
+                assert_eq!(dropped.partials, rebuilt.partials, "丟掉 {cut} 個按鍵");
+                assert_eq!(dropped.nodes, rebuilt.nodes, "丟掉 {cut} 個按鍵");
+            }
+        }
     }
 }

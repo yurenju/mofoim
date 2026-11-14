@@ -86,7 +86,8 @@ fn the_user_can_pin_the_neighboring_key_reading() {
 
 #[test]
 fn pinning_the_whole_sentence_guess_pins_everything_before_the_cursor() {
-    let mut engine = engine();
+    // 聲調一定要打時，最後的 ㄘ 還猜不出來，也跟著一起釘住。
+    let mut engine = common::toned_engine();
     type_keys(&mut engine, "ji3h");
     assert_eq!(shown(&engine.pin(0)), "[我ㄘ]|");
 }
