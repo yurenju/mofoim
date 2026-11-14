@@ -1,0 +1,74 @@
+# 每個 pull request：跑引擎、準確率與網頁前端的測試，並確認網頁版建置得起來。
+# push 到 main 之後的測試由「部署網頁版」負責，步驟和這裡一樣。
+name: 測試
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# 同一個 pull request 有新的 push 時，取消還在跑的舊測試。
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: 安裝 WebAssembly 編譯目標
+        run: rustup target add wasm32-unknown-unknown
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: 還原 Rust 編譯結果的快取
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+
+      # 上游資料固定在特定版本，版本寫在 fetch-data.sh 裡，所以用它的內容當快取的鑰匙。
+      - name: 還原上游資料的快取
+        uses: actions/cache@v6
+        with:
+          path: |
+            data/upstream
+            data/cc0-sentences
+          key: upstream-data-${{ hashFiles('scripts/fetch-data.sh') }}
+
+      - name: 下載上游資料
+        run: bash scripts/fetch-data.sh
+
+      - name: 建置資料檔
+        run: cargo run --release -p mofoim-data-builder -- model data/upstream/dict/chewing_v4 data/mofoim.dat
+
+      - name: 引擎與工具的測試
+        run: cargo test --workspace
+
+      # 計時的測試在共用的 CI 機器上不穩定，這裡只跑準確率的部分。
+      - name: 準確率測試
+        run: >
+          cargo test --release -p mofoim-accuracy -- --ignored
+          --skip every_key_is_handled_within_the_time_budget
+          --skip a_full_composition_stays_fast
+
+      - name: 安裝網頁前端的套件
+        run: npm --prefix web ci
+
+      - name: 網頁前端的測試
+        run: npm --prefix web test
+
+      # 包含把引擎編譯成 WebAssembly 與型別檢查。
+      - name: 建置網頁版
+        run: npm --prefix web run build
