@@ -71,8 +71,9 @@ fn exact_typing_gives_the_same_result_with_and_without_tolerance() {
 
 #[test]
 fn keys_that_fit_nothing_even_with_tolerance_stay_visible() {
-    assert_eq!(typed("hh"), "ㄘㄘ");
-    assert_eq!(typed("ji3hh"), "我ㄘㄘ");
+    // ㄅ 和它的相鄰鍵（ㄉ、ㄆ）單獨一個符號都不是任何字。
+    assert_eq!(typed("11"), "ㄅㄅ");
+    assert_eq!(typed("ji311"), "我ㄅㄅ");
 }
 
 #[test]

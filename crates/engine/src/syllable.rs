@@ -75,6 +75,17 @@ impl Syllable {
         ))
     }
 
+    /// 聲調不拘的音節：只有聲母、介音、韻母（`parts` 裡的聲調會被忽略）。
+    /// 用來一次查出「不管哪個聲調」的所有讀音，不代表任何實際的讀音。
+    pub fn any_tone(parts: [u8; 4]) -> Option<Syllable> {
+        Syllable::new([parts[0], parts[1], parts[2], 1]).map(|syllable| Syllable(syllable.0 & !7))
+    }
+
+    /// 這個音節有沒有確定的聲調；[`Syllable::any_tone`] 做出來的沒有。
+    pub fn has_tone(self) -> bool {
+        self.0 & 7 != 0
+    }
+
     pub fn parts(self) -> [u8; 4] {
         let v = self.0;
         [(v >> 9) as u8, (v >> 7 & 3) as u8, (v >> 3 & 15) as u8, (v & 7) as u8]

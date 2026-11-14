@@ -6,9 +6,8 @@
 //! cargo test --release -p mofoim-accuracy -- --ignored
 //! ```
 
-use mofoim_accuracy::{measure, Report, Typist};
-use mofoim_engine::syllable::Slot;
-use mofoim_engine::{Config, Engine, Key, Layout, Model};
+use mofoim_accuracy::{measure, measure_typing, reverse_within_syllables, Report, Typing, Typist};
+use mofoim_engine::{Config, Engine, Key, Model};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -33,20 +32,38 @@ fn run(config: &Config, typo_rate: f64) -> Report {
     measure(&load_model(), config, &sentences, typo_rate, 1)
 }
 
+fn run_typing(config: &Config, typing: Typing) -> Report {
+    let text = load_sentences();
+    let sentences: Vec<&str> = text.lines().filter(|l| !l.is_empty()).collect();
+    measure_typing(&load_model(), config, &sentences, Typing { seed: 1, ..typing })
+}
+
 /// 建立這些測試時量到的數字（2,000 句，誤觸機率為每個按鍵 3%）：
 ///
-/// | 情況                 | 字     | 整句   |
-/// |----------------------|--------|--------|
-/// | 關閉容錯、完全打對   | 96.87% | 82.85% |
-/// | 關閉容錯、加入誤觸   | 76.51% | 44.35% |
-/// | 開啟容錯、完全打對   | 96.87% | 82.75% |
-/// | 開啟容錯、加入誤觸   | 95.27% | 76.25% |
+/// | 情況                             | 字     | 整句   |
+/// |----------------------------------|--------|--------|
+/// | 關閉容錯、完全打對               | 96.85% | 82.80% |
+/// | 關閉容錯、加入誤觸               | 79.81% | 44.35% |
+/// | 開啟容錯、完全打對               | 96.85% | 82.70% |
+/// | 開啟容錯、加入誤觸               | 95.04% | 75.45% |
+/// | 聲調必打、開啟容錯、完全打對     | 96.87% | 82.75% |
+/// | 聲調必打、開啟容錯、加入誤觸     | 95.27% | 76.25% |
+/// | 完全不打聲調                     | 90.84% | 64.10% |
+/// | 完全不打聲調、加入誤觸           | 87.20% | 55.20% |
+/// | 一半的聲調不打                   | 94.11% | 73.60% |
+/// | 一半的聲調不打、加入誤觸         | 91.44% | 65.50% |
 ///
+/// 「聲調必打」是 ADR 0005 之前的行為，留著當比較基準。
 /// 下面的門檻比量到的數字略低一點，留給之後調整詞庫或參數的空間，但擋得住明顯的倒退。
 const TYPO_RATE: f64 = 0.03;
 
 fn exact() -> Config {
     Config { max_typos_per_syllable: 0, ..Config::default() }
+}
+
+/// 聲調一定要打的設定。
+fn toned() -> Config {
+    Config { toneless_penalty: None, ..Config::default() }
 }
 
 /// 關閉容錯、完全打對時的準確率，是判斷「容錯有沒有把打對的字改錯」的比較基準。
@@ -82,6 +99,42 @@ fn tolerance_recovers_most_typos() {
     assert!(with.character_accuracy() > without.character_accuracy() + 15.0);
 }
 
+/// 允許不打聲調的代價，不能是讓照常打聲調的人明顯變差。
+#[test]
+#[ignore = "需要 data/mofoim.dat"]
+fn optional_tones_do_not_hurt_typing_with_tones() {
+    for (typo_rate, characters, sentences) in [(0.0, 0.1, 0.5), (TYPO_RATE, 0.5, 1.5)] {
+        let required = run(&toned(), typo_rate);
+        let optional = run(&Config::default(), typo_rate);
+        let lost_characters = required.character_accuracy() - optional.character_accuracy();
+        let lost_sentences = required.sentence_accuracy() - optional.sentence_accuracy();
+        assert!(lost_characters <= characters, "字的準確率下降了 {lost_characters:.2} 個百分點");
+        assert!(lost_sentences <= sentences, "整句的準確率下降了 {lost_sentences:.2} 個百分點");
+    }
+}
+
+/// 完全不打聲調時，大部分的字仍然要猜得出來；有誤觸時也一樣。
+#[test]
+#[ignore = "需要 data/mofoim.dat"]
+fn sentences_typed_without_tones_are_mostly_guessed() {
+    let toneless = Typing { toneless_rate: 1.0, ..Typing::default() };
+    let clean = run_typing(&Config::default(), toneless);
+    assert!(clean.character_accuracy() >= 90.0, "字的準確率：{:.2}%", clean.character_accuracy());
+    assert!(clean.sentence_accuracy() >= 62.5, "整句的準確率：{:.2}%", clean.sentence_accuracy());
+    let noisy = run_typing(&Config::default(), Typing { typo_rate: TYPO_RATE, ..toneless });
+    assert!(noisy.character_accuracy() >= 86.5, "字的準確率：{:.2}%", noisy.character_accuracy());
+    assert!(noisy.sentence_accuracy() >= 54.0, "整句的準確率：{:.2}%", noisy.sentence_accuracy());
+}
+
+/// 只省略一部分聲調時，準確率要介於全打與全不打之間，省得越少越準。
+#[test]
+#[ignore = "需要 data/mofoim.dat"]
+fn typing_some_of_the_tones_helps() {
+    let half = run_typing(&Config::default(), Typing { toneless_rate: 0.5, ..Typing::default() });
+    assert!(half.character_accuracy() >= 93.5, "字的準確率：{:.2}%", half.character_accuracy());
+    assert!(half.sentence_accuracy() >= 72.0, "整句的準確率：{:.2}%", half.sentence_accuracy());
+}
+
 /// 每次按鍵的運算要夠快，使用者才不會覺得卡。
 #[test]
 #[ignore = "需要 data/mofoim.dat"]
@@ -115,34 +168,19 @@ fn a_full_composition_stays_fast() {
     println!("編輯區滿載時最慢的一次按鍵：{slowest:.2} 毫秒");
 }
 
-/// 把每個字裡聲調鍵之前的按鍵順序整個倒過來。
-fn reverse_within_syllables(keys: &str, layout: &Layout) -> String {
-    let mut out = String::new();
-    let mut pending: Vec<char> = Vec::new();
-    for key in keys.chars() {
-        if layout.symbol(key).is_some_and(|s| s.slot == Slot::Tone) {
-            out.extend(pending.drain(..).rev());
-            out.push(key);
-        } else {
-            pending.push(key);
-        }
-    }
-    out.extend(pending);
-    out
-}
-
-fn typed(model: &Arc<Model>, keys: &str) -> String {
-    let mut engine = Engine::new(model.clone(), Config::default());
+fn typed(model: &Arc<Model>, config: &Config, keys: &str) -> String {
+    let mut engine = Engine::new(model.clone(), config.clone());
     for key in keys.chars() {
         engine.handle_key(Key::Char(key));
     }
     engine.snapshot().text()
 }
 
-/// 同一個字裡的符號不管按的順序：整批句子把順序倒過來打，猜出來的結果要一模一樣。
+/// 聲調一定要打時，同一個字裡的符號不管按的順序：整批句子把順序倒過來打，
+/// 猜出來的結果要一模一樣。
 #[test]
 #[ignore = "需要 data/mofoim.dat"]
-fn symbol_order_within_a_syllable_does_not_change_the_result() {
+fn symbol_order_within_a_syllable_does_not_change_the_result_when_tones_are_required() {
     let model = load_model();
     let typist = Typist::new(&model);
     let text = load_sentences();
@@ -151,7 +189,23 @@ fn symbol_order_within_a_syllable_does_not_change_the_result() {
         let keys = typist.keys_for(sentence).unwrap();
         let reversed = reverse_within_syllables(&keys, typist.layout());
         reordered += (reversed != keys) as usize;
-        assert_eq!(typed(&model, &reversed), typed(&model, &keys), "{sentence}");
+        assert_eq!(typed(&model, &toned(), &reversed), typed(&model, &toned(), &keys), "{sentence}");
     }
     assert!(reordered > 1900, "測試要真的有換到順序，實際只有 {reordered} 句");
+}
+
+/// 聲調可以不打時，順序顛倒的按鍵多了「其實是兩個沒打聲調的字」這種解讀，
+/// 個別句子的結果可能不同，但整體不能比照順序打的時候差。
+#[test]
+#[ignore = "需要 data/mofoim.dat"]
+fn symbol_order_within_a_syllable_does_not_cost_accuracy() {
+    for typo_rate in [0.0, TYPO_RATE] {
+        let in_order = run(&Config::default(), typo_rate);
+        let reversed = Typing { reversed: true, typo_rate, ..Typing::default() };
+        let reversed = run_typing(&Config::default(), reversed);
+        let lost_characters = in_order.character_accuracy() - reversed.character_accuracy();
+        let lost_sentences = in_order.sentence_accuracy() - reversed.sentence_accuracy();
+        assert!(lost_characters <= 0.2, "字的準確率下降了 {lost_characters:.2} 個百分點");
+        assert!(lost_sentences <= 0.5, "整句的準確率下降了 {lost_sentences:.2} 個百分點");
+    }
 }

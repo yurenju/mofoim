@@ -34,6 +34,8 @@ pub struct Model {
     bigram_next: Vec<u32>,
     bigram_score: Vec<f32>,
     valid_syllable: Vec<bool>,
+    /// 每個詞在 [`Model::score`] 可能拿到的最高分。
+    best_score: Vec<f32>,
 }
 
 impl Model {
@@ -71,6 +73,17 @@ impl Model {
         let mut valid_syllable = vec![false; Syllable::LIMIT];
         for &syllable in &child_syllable {
             valid_syllable[syllable as usize] = true;
+            // 聲調不拘的音節（聲調的位元是 0）：只要有任何一個聲調用到就算。
+            valid_syllable[(syllable & !7) as usize] = true;
+        }
+        if bigram_next.iter().any(|&word| word as usize >= words) {
+            return Err("資料檔內容不一致，可能已損毀".into());
+        }
+        let backoff = (1.0 - BIGRAM_WEIGHT).log10();
+        let mut best_score: Vec<f32> = unigram.iter().map(|score| score + backoff).collect();
+        for (&word, &score) in bigram_next.iter().zip(&bigram_score) {
+            let best = &mut best_score[word as usize];
+            *best = best.max(score);
         }
         let entries = entry_word
             .iter()
@@ -90,6 +103,7 @@ impl Model {
             bigram_next,
             bigram_score,
             valid_syllable,
+            best_score,
         })
     }
 
@@ -121,6 +135,25 @@ impl Model {
         Some(self.child_node[start + found])
     }
 
+    /// 讀音樹的 `node` 底下還有沒有更長的讀音。
+    pub fn has_children(&self, node: u32) -> bool {
+        self.node_child_start[node as usize] < self.node_child_start[node as usize + 1]
+    }
+
+    /// 從讀音樹的 `node` 沿著 `syllable` 往下走一步可以到的所有節點。
+    /// `syllable` 是聲調不拘的音節時，每個聲調各有一個節點；否則最多一個。
+    pub fn children(&self, node: u32, syllable: Syllable) -> &[u32] {
+        let start = self.node_child_start[node as usize] as usize;
+        let end = self.node_child_start[node as usize + 1] as usize;
+        let syllables = &self.child_syllable[start..end];
+        // 子節點依音節的數值排序，而聲調在最低的三個位元，所以同一個音節的各個聲調是連在一起的。
+        let (low, high) =
+            if syllable.has_tone() { (syllable.0, syllable.0) } else { (syllable.0, syllable.0 | 7) };
+        let from = syllables.partition_point(|&s| s < low);
+        let to = from + syllables[from..].partition_point(|&s| s <= high);
+        &self.child_node[start + from..start + to]
+    }
+
     /// 讀音剛好走到 `node` 的所有詞，機率高的排前面。
     pub fn entries(&self, node: u32) -> &[Entry] {
         let start = self.node_entry_start[node as usize] as usize;
@@ -139,6 +172,12 @@ impl Model {
             }
         }
         self.unigram[word as usize] + (1.0 - BIGRAM_WEIGHT).log10()
+    }
+
+    /// 不管前一個詞是什麼，[`Model::score`] 對 `word` 可能回傳的最高分。
+    /// 找分數最高的前文時，可以用它判斷剩下的前文還有沒有機會。
+    pub fn best_score(&self, word: u32) -> f32 {
+        self.best_score[word as usize]
     }
 
     /// 走訪詞庫裡的每一筆：詞、讀音、扣分。供工具使用，引擎猜句子時不會用到。
@@ -413,6 +452,25 @@ mod tests {
     }
 
     #[test]
+    fn walks_every_tone_of_a_syllable_at_once() {
+        let mut builder = ModelBuilder::new();
+        for (word, reading) in [("詩", "ㄕ"), ("十", "ㄕˊ"), ("是", "ㄕˋ"), ("書", "ㄕㄨ")] {
+            assert!(builder.add_entry(word, reading, 0.0));
+        }
+        let model = Model::from_bytes(&builder.build()).unwrap();
+        let words = |syllable: Syllable| -> Vec<&str> {
+            let nodes = model.children(0, syllable).iter();
+            nodes.map(|&node| model.word(model.entries(node)[0].word)).collect()
+        };
+        let any_tone = Syllable::any_tone(syllable("ㄕˋ").parts()).unwrap();
+        assert_eq!(words(any_tone), ["詩", "十", "是"], "不包含 ㄕㄨ");
+        assert_eq!(words(syllable("ㄕˋ")), ["是"]);
+        assert!(model.children(0, syllable("ㄕˇ")).is_empty());
+        assert!(model.is_valid_syllable(any_tone));
+        assert!(!model.is_valid_syllable(Syllable::any_tone(syllable("ㄘㄠ").parts()).unwrap()));
+    }
+
+    #[test]
     fn knows_which_syllables_exist() {
         let model = sample();
         assert!(model.is_valid_syllable(syllable("ㄕˋ")));
@@ -424,6 +482,8 @@ mod tests {
         let model = sample();
         let (ce, shi) = (model.word_id("測").unwrap(), model.word_id("試").unwrap());
         assert!(model.score(Some(ce), shi) > model.score(None, shi));
+        assert_eq!(model.best_score(shi), model.score(Some(ce), shi));
+        assert_eq!(model.best_score(ce), model.score(None, ce), "沒有 bigram 的詞");
         assert_eq!(model.score(Some(shi), ce), model.score(None, ce));
     }
 

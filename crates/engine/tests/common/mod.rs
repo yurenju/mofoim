@@ -99,6 +99,11 @@ pub fn press(engine: &mut Engine, keys: &[Key]) -> Snapshot {
     last
 }
 
+/// 聲調一定要打的引擎，用來對照，以及測試「拼不成音節的按鍵」的行為。
+pub fn toned_engine() -> Engine {
+    engine_with(Config { toneless_penalty: None, ..Config::default() })
+}
+
 /// 關閉容錯的引擎，用來對照。
 pub fn exact_engine() -> Engine {
     engine_with(Config { max_typos_per_syllable: 0, ..Config::default() })

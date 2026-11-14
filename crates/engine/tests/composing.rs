@@ -2,7 +2,7 @@
 
 mod common;
 
-use common::{engine, engine_with, shown, type_keys, typed};
+use common::{engine, engine_with, shown, toned_engine, type_keys, typed};
 use mofoim_engine::{Config, Key};
 
 #[test]
@@ -14,8 +14,8 @@ fn a_finished_syllable_becomes_the_most_likely_character() {
 }
 
 #[test]
-fn an_unfinished_syllable_shows_the_symbols_actually_pressed() {
-    let snapshot = type_keys(&mut engine(), "hk");
+fn an_unfinished_syllable_shows_the_symbols_actually_pressed_when_tones_are_required() {
+    let snapshot = type_keys(&mut toned_engine(), "hk");
     assert_eq!(snapshot.text(), "ㄘㄜ");
 }
 
@@ -39,13 +39,15 @@ fn the_editing_area_shows_the_keys_pressed_not_the_reading_the_engine_guessed() 
 fn keys_are_grouped_into_syllables() {
     assert_eq!(shown(&type_keys(&mut engine(), "u 1p3gj ")), "ㄧ ·ㄅㄣˇ·ㄕㄨ |", "一聲顯示成空格");
     assert_eq!(shown(&type_keys(&mut engine(), "g.3h")), "ㄕㄡˇ·ㄘ|", "還沒打完的音節自己一組");
-    assert_eq!(shown(&type_keys(&mut engine(), "hkk4hh")), "ㄘㄜㄜˋ·ㄘㄘ|", "猜不出來的以聲調為界");
+    let unreadable = type_keys(&mut toned_engine(), "hkk4hh");
+    assert_eq!(shown(&unreadable), "ㄘㄜㄜˋ·ㄘㄘ|", "聲調一定要打時，猜不出來的以聲調為界");
     // 引擎認出 4 是按錯的 e 時，照它的切法分組，而不是看到聲調就切。
     assert_eq!(shown(&type_keys(&mut engine(), "ji3g44k4")), "ㄨㄛˇ·ㄕˋ·ˋㄜˋ|");
 }
 
 #[test]
 fn keys_that_form_no_syllable_stay_visible_instead_of_vanishing() {
+    let typed = |keys| type_keys(&mut toned_engine(), keys).text();
     assert_eq!(typed("hh"), "ㄘㄘ");
     assert_eq!(typed("hkk4"), "ㄘㄜㄜˋ");
     assert_eq!(typed("4hk4"), "ˋ測");
@@ -103,14 +105,14 @@ fn enter_sends_the_whole_composition() {
 
 #[test]
 fn enter_sends_unfinished_symbols_as_shown() {
-    let mut engine = engine();
+    let mut engine = toned_engine();
     type_keys(&mut engine, "ji3h");
     assert_eq!(engine.handle_key(Key::Enter).committed, "我ㄘ");
 }
 
 #[test]
 fn backspace_removes_only_the_last_key() {
-    let mut engine = engine();
+    let mut engine = toned_engine();
     type_keys(&mut engine, "g.3hk4");
     assert_eq!(engine.handle_key(Key::Backspace).text(), "手ㄘㄜ");
     assert_eq!(engine.handle_key(Key::Backspace).text(), "手ㄘ");

@@ -199,7 +199,8 @@ mod tests {
         builder.add_entry("冊", "ㄘㄜˋ", 0.0);
         let model = Arc::new(Model::from_bytes(&builder.build()).unwrap());
         let mut engine = Engine::new(model, Config::default());
-        // 第二個音節的 k 按成隔壁的 l，游標再往前移一個按鍵。
+        // 第二個音節的 k 按成隔壁的 l，游標再往前移一個按鍵：游標之前剩下沒打聲調的 ㄘㄠ，
+        // 仍然猜得出是按錯的「冊」。
         for ch in "hk4hl4".chars() {
             engine.handle_key(Key::Char(ch));
         }
@@ -210,7 +211,7 @@ mod tests {
             snapshot_json(&engine.snapshot()),
             concat!(
                 r#"{"pinned":["冊"],"beforeCursor":["ㄘㄠ"],"afterCursor":["ˋ"],"#,
-                r#""candidates":[{"text":"ㄘㄠ","corrected":[]}],"highlighted":0,"#,
+                r#""candidates":[{"text":"冊","corrected":[0]}],"highlighted":0,"#,
                 r#""committed":"","mode":"chinese","handled":true}"#
             )
         );

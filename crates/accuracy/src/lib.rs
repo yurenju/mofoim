@@ -1,6 +1,7 @@
 //! 準確率測試的工具：把句子轉成「照理應該按的鍵」，可以隨機加入誤觸，
 //! 再交給引擎，量測猜出來的句子和原句有多像。
 
+use mofoim_engine::syllable::Slot;
 use mofoim_engine::{Config, Engine, Key, Layout, Model, Syllable};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -118,6 +119,44 @@ pub fn add_typos(keys: &str, layout: &Layout, rate: f64, rng: &mut Rng) -> Strin
         .collect()
 }
 
+/// 每個聲調鍵（包含代表一聲的空白鍵）以 `rate` 的機率不按。
+pub fn drop_tones(keys: &str, layout: &Layout, rate: f64, rng: &mut Rng) -> String {
+    keys.chars()
+        .filter(|&key| {
+            let tone = layout.symbol(key).is_some_and(|s| s.slot == Slot::Tone);
+            !tone || rng.fraction() >= rate
+        })
+        .collect()
+}
+
+/// 把每個字裡聲調鍵之前的按鍵順序整個倒過來，模擬兩手幾乎同時按下時順序顛倒。
+pub fn reverse_within_syllables(keys: &str, layout: &Layout) -> String {
+    let mut out = String::new();
+    let mut pending: Vec<char> = Vec::new();
+    for key in keys.chars() {
+        if layout.symbol(key).is_some_and(|s| s.slot == Slot::Tone) {
+            out.extend(pending.drain(..).rev());
+            out.push(key);
+        } else {
+            pending.push(key);
+        }
+    }
+    out.extend(pending);
+    out
+}
+
+/// 模擬的打字方式。
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Typing {
+    /// 每個按鍵變成誤觸的機率。
+    pub typo_rate: f64,
+    /// 每個聲調鍵被省略的機率；1.0 代表完全不打聲調。
+    pub toneless_rate: f64,
+    /// 每個字裡聲調鍵之前的按鍵是否倒過來按。
+    pub reversed: bool,
+    pub seed: u64,
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Report {
     /// 參與測試的句數（詞庫沒收的字會讓句子被略過）。
@@ -158,15 +197,33 @@ pub fn measure(
     typo_rate: f64,
     seed: u64,
 ) -> Report {
+    measure_typing(model, config, sentences, Typing { typo_rate, seed, ..Typing::default() })
+}
+
+/// 和 [`measure`] 一樣，但可以指定省略多少聲調鍵。先省略聲調，再加入誤觸。
+pub fn measure_typing(
+    model: &Arc<Model>,
+    config: &Config,
+    sentences: &[&str],
+    typing: Typing,
+) -> Report {
     let typist = Typist::new(model);
-    let mut rng = Rng::new(seed);
+    let mut rng = Rng::new(typing.seed);
+    // 省略聲調用另一個亂數產生器，這樣不管有沒有加誤觸，被省略的都是同一批聲調鍵。
+    let mut tone_rng = Rng::new(typing.seed ^ 0x9E37_79B9_7F4A_7C15);
     let mut report = Report::default();
     for sentence in sentences {
-        let Some(keys) = typist.keys_for(sentence) else {
+        let Some(mut keys) = typist.keys_for(sentence) else {
             report.skipped += 1;
             continue;
         };
-        let keys = add_typos(&keys, typist.layout(), typo_rate, &mut rng);
+        if typing.reversed {
+            keys = reverse_within_syllables(&keys, typist.layout());
+        }
+        if typing.toneless_rate > 0.0 {
+            keys = drop_tones(&keys, typist.layout(), typing.toneless_rate, &mut tone_rng);
+        }
+        let keys = add_typos(&keys, typist.layout(), typing.typo_rate, &mut rng);
         let mut engine = Engine::new(model.clone(), config.clone());
         let mut snapshot = engine.snapshot();
         for key in keys.chars() {

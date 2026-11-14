@@ -116,28 +116,44 @@ struct Choice {
 }
 
 /// 把按鍵依音節分組，回傳每一組有幾個按鍵。
-#[derive(Default)]
 struct Grouper {
     sizes: Vec<usize>,
     /// 最後一組還能不能再接按鍵，以及它是不是注音。
     open: Option<bool>,
+    /// 聲調是否可以不打。可以的話，聲調鍵不再是音節唯一的結尾。
+    toneless: bool,
+    /// 最後一組已經有哪些位置（聲母、介音、韻母、聲調）的符號。
+    filled: [bool; 4],
 }
 
 impl Grouper {
+    fn new(toneless: bool) -> Grouper {
+        Grouper { sizes: Vec::new(), open: None, toneless, filled: [false; 4] }
+    }
+
     /// 引擎已經認定是一個音節的幾個按鍵。
     fn syllable(&mut self, keys: usize) {
         self.sizes.push(keys);
         self.open = None;
     }
 
-    /// 還不屬於任何音節的一個按鍵：連續的注音符號算一組，遇到聲調就結束；
-    /// 連續的原樣字元算一組。
-    fn loose(&mut self, zhuyin: bool, ends_group: bool) {
+    /// 還不屬於任何音節的一個按鍵，`slot` 是它的注音符號在音節裡的位置，原樣字元是 `None`。
+    /// 連續的注音符號算一組，遇到聲調就結束；聲調可以不打時，同一個位置出現第二個符號
+    /// （例如又一個聲母）也代表下一個音節開始了。連續的原樣字元算一組。
+    fn loose(&mut self, slot: Option<Slot>) {
+        let zhuyin = slot.is_some();
+        let repeated = self.toneless && slot.is_some_and(|slot| self.filled[slot as usize]);
         match self.sizes.last_mut() {
-            Some(size) if self.open == Some(zhuyin) => *size += 1,
-            _ => self.sizes.push(1),
+            Some(size) if self.open == Some(zhuyin) && !repeated => *size += 1,
+            _ => {
+                self.sizes.push(1);
+                self.filled = [false; 4];
+            }
         }
-        self.open = (!ends_group).then_some(zhuyin);
+        if let Some(slot) = slot {
+            self.filled[slot as usize] = true;
+        }
+        self.open = (slot != Some(Slot::Tone)).then_some(zhuyin);
     }
 }
 
@@ -412,14 +428,13 @@ impl Engine {
     /// 釘住第 `index` 個候選字，回傳釘住的文字；沒有這個候選字就什麼都不做。
     fn pin_choice(&mut self, index: usize) -> Option<String> {
         let choice = self.choices().into_iter().nth(index)?;
-        let rest = self.lattice.strokes()[choice.end..].to_vec();
         self.pinned.push(PinnedSegment {
             raw: self.before.drain(..choice.end).collect(),
             strokes: self.lattice.strokes()[..choice.end].to_vec(),
             text: choice.text.clone(),
             context: choice.context,
         });
-        self.lattice.rebuild(rest, choice.context);
+        self.lattice.drop_prefix(choice.end, choice.context);
         Some(choice.text)
     }
 
@@ -472,19 +487,23 @@ impl Engine {
             .collect()
     }
 
+    fn grouper(&self) -> Grouper {
+        Grouper::new(self.lattice.config().toneless_penalty.is_some())
+    }
+
     fn add_loose(&self, grouper: &mut Grouper, stroke: Stroke) {
         match stroke {
-            Stroke::Literal(_) => grouper.loose(false, false),
+            Stroke::Literal(_) => grouper.loose(None),
             Stroke::Zhuyin(key) => {
-                let tone = self.lattice.layout().symbol(key).is_some_and(|s| s.slot == Slot::Tone);
-                grouper.loose(true, tone);
+                grouper.loose(self.lattice.layout().symbol(key).map(|symbol| symbol.slot))
             }
         }
     }
 
-    /// 游標之前、還沒釘住的按鍵依音節分組：引擎猜成詞的部分照它的切法，其餘以聲調鍵為界。
+    /// 游標之前、還沒釘住的按鍵依音節分組：引擎猜成詞的部分照它的切法，
+    /// 其餘照 [`Grouper::loose`] 的規則。
     fn groups_before(&self) -> Vec<usize> {
-        let mut grouper = Grouper::default();
+        let mut grouper = self.grouper();
         for segment in self.lattice.best_path() {
             if segment.word.is_none() {
                 self.add_loose(&mut grouper, self.lattice.strokes()[segment.start]);
@@ -498,9 +517,9 @@ impl Engine {
         grouper.sizes
     }
 
-    /// 游標之後的按鍵沒有猜測可以依據，一律以聲調鍵為界分組。
+    /// 游標之後的按鍵沒有猜測可以依據，一律照 [`Grouper::loose`] 的規則分組。
     fn groups_after(&self) -> Vec<usize> {
-        let mut grouper = Grouper::default();
+        let mut grouper = self.grouper();
         for &(_, stroke) in self.after.iter().rev() {
             self.add_loose(&mut grouper, stroke);
         }
@@ -604,8 +623,7 @@ impl Engine {
             }
             self.before.drain(..first.end);
             self.sent_context = first.word;
-            let rest = self.lattice.strokes()[first.end..].to_vec();
-            self.lattice.rebuild(rest, first.word);
+            self.lattice.drop_prefix(first.end, first.word);
         }
         committed
     }
