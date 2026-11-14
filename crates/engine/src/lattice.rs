@@ -366,14 +366,16 @@ impl Lattice {
 
     /// 把 `start..end` 的按鍵當成一個音節，列出所有可能的讀法與各自的誤觸次數。
     fn interpret(&self, start: usize, end: usize, out: &mut Vec<(Syllable, u8)>) {
-        self.interpret_from(start, end, -1, [0; 4], 0, out);
+        self.interpret_from(start, end, [0; 4], 0, out);
+        // 順序不拘時，不同的誤觸組合可能湊出同一個音節，只留誤觸最少的那個。
+        out.sort_by_key(|&(syllable, typos)| (syllable, typos));
+        out.dedup_by_key(|&mut (syllable, _)| syllable);
     }
 
     fn interpret_from(
         &self,
         at: usize,
         end: usize,
-        last_slot: i8,
         parts: [u8; 4],
         typos: u8,
         out: &mut Vec<(Syllable, u8)>,
@@ -390,13 +392,14 @@ impl Lattice {
         let is_last = at + 1 == end;
         let mut consider = |key: char, typos: u8| {
             let Some(symbol) = self.layout.symbol(key) else { return };
-            // 符號要依聲母、介音、韻母的順序出現，而且只有最後一個鍵是聲調。
-            if (symbol.slot == Slot::Tone) != is_last || symbol.slot as i8 <= last_slot {
+            // 只有最後一個鍵是聲調。聲調之前的聲母、介音、韻母不管按的順序，
+            // 因為兩手幾乎同時按下時順序常常顛倒；但同一個位置不能有兩個符號。
+            if (symbol.slot == Slot::Tone) != is_last || parts[symbol.slot as usize] != 0 {
                 return;
             }
             let mut next = parts;
             next[symbol.slot as usize] = symbol.index;
-            self.interpret_from(at + 1, end, symbol.slot as i8, next, typos, out);
+            self.interpret_from(at + 1, end, next, typos, out);
         };
         consider(key, typos);
         if typos < self.config.max_typos_per_syllable {

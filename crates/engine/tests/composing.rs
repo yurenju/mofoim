@@ -29,6 +29,25 @@ fn keys_that_form_no_syllable_stay_visible_instead_of_vanishing() {
 }
 
 #[test]
+fn symbols_within_a_syllable_can_be_pressed_in_any_order() {
+    // 兩手幾乎同時按下時，聲母、介音、韻母的順序常常顛倒，這不算打錯。
+    assert_eq!(typed("kh4"), typed("hk4"));
+    assert_eq!(typed(".g3kh4"), "手冊");
+    assert_eq!(typed("/j5 pj6"), "中文");
+    assert_eq!(typed("j/5 "), "中");
+}
+
+#[test]
+fn any_order_costs_nothing_even_without_tolerance() {
+    assert_eq!(type_keys(&mut common::exact_engine(), ".g3kh4").text(), "手冊");
+}
+
+#[test]
+fn the_tone_key_must_still_come_last() {
+    assert_eq!(type_keys(&mut common::exact_engine(), "h4k").text(), "ㄘˋㄜ");
+}
+
+#[test]
 fn space_is_the_first_tone() {
     assert_eq!(typed("5j/ "), "中");
     assert_eq!(typed("5j/ jp6"), "中文");

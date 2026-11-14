@@ -7,7 +7,8 @@
 //! ```
 
 use mofoim_accuracy::{measure, Report, Typist};
-use mofoim_engine::{Config, Engine, Key, Model};
+use mofoim_engine::syllable::Slot;
+use mofoim_engine::{Config, Engine, Key, Layout, Model};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -112,4 +113,45 @@ fn a_full_composition_stays_fast() {
     assert_eq!(sent.chars().count(), text.chars().count());
     assert!(slowest < 10.0, "最慢的一次按鍵花了 {slowest:.2} 毫秒");
     println!("編輯區滿載時最慢的一次按鍵：{slowest:.2} 毫秒");
+}
+
+/// 把每個字裡聲調鍵之前的按鍵順序整個倒過來。
+fn reverse_within_syllables(keys: &str, layout: &Layout) -> String {
+    let mut out = String::new();
+    let mut pending: Vec<char> = Vec::new();
+    for key in keys.chars() {
+        if layout.symbol(key).is_some_and(|s| s.slot == Slot::Tone) {
+            out.extend(pending.drain(..).rev());
+            out.push(key);
+        } else {
+            pending.push(key);
+        }
+    }
+    out.extend(pending);
+    out
+}
+
+fn typed(model: &Arc<Model>, keys: &str) -> String {
+    let mut engine = Engine::new(model.clone(), Config::default());
+    for key in keys.chars() {
+        engine.handle_key(Key::Char(key));
+    }
+    engine.snapshot().text()
+}
+
+/// 同一個字裡的符號不管按的順序：整批句子把順序倒過來打，猜出來的結果要一模一樣。
+#[test]
+#[ignore = "需要 data/mofoim.dat"]
+fn symbol_order_within_a_syllable_does_not_change_the_result() {
+    let model = load_model();
+    let typist = Typist::new(&model);
+    let text = load_sentences();
+    let mut reordered = 0;
+    for sentence in text.lines().filter(|l| !l.is_empty()) {
+        let keys = typist.keys_for(sentence).unwrap();
+        let reversed = reverse_within_syllables(&keys, typist.layout());
+        reordered += (reversed != keys) as usize;
+        assert_eq!(typed(&model, &reversed), typed(&model, &keys), "{sentence}");
+    }
+    assert!(reordered > 1900, "測試要真的有換到順序，實際只有 {reordered} 句");
 }
