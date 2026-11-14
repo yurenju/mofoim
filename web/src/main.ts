@@ -35,8 +35,10 @@ function render() {
   caret.className = "caret";
   editor.append(caret);
 
-  modeBadge.textContent = snapshot.mode === "chinese" ? "中" : "英";
-  modeBadge.classList.toggle("english", snapshot.mode === "english");
+  const english = snapshot.mode === "english";
+  modeBadge.textContent = english ? "英" : "中";
+  modeBadge.classList.toggle("english", english);
+  modeBadge.setAttribute("aria-label", english ? "英文模式，按一下切換成中文模式" : "中文模式，按一下切換成英文模式");
   if (openCell !== null && !editor.querySelector(`[data-cell="${openCell}"]`)) openCell = null;
   renderCandidates();
 }
@@ -86,19 +88,21 @@ function editPlainText(key: EngineKey) {
   else sent += plainText(key);
 }
 
-/** 讓引擎的中英模式跟著 Caps Lock 的燈號走。 */
-function syncMode(event: KeyboardEvent) {
-  const wanted = event.getModifierState("CapsLock") ? "english" : "chinese";
-  if (wanted !== snapshot.mode) apply(engine.key({ kind: "toggleMode" }));
+/** 切換中文模式與英文模式。 */
+function toggleMode() {
+  openCell = null;
+  apply(engine.key({ kind: "toggleMode" }));
 }
 
 editor.addEventListener("keydown", (event) => {
   const key = toEngineKey(event);
-  // Caps Lock 自己的 keydown 事件裡，燈號狀態在各瀏覽器不一致，等 keyup 再同步。
-  if (key?.kind === "toggleMode") return;
-  syncMode(event);
   if (!key) return;
   event.preventDefault();
+  // Caps Lock 可能被系統的輸入法攔走，所以畫面上另外有一個按鈕做同樣的事。
+  if (key.kind === "toggleMode") {
+    if (!event.repeat) toggleMode();
+    return;
+  }
 
   if (openCell !== null) {
     const picked = key.kind === "char" ? "123456789".indexOf(key.ch) : -1;
@@ -112,8 +116,6 @@ editor.addEventListener("keydown", (event) => {
   apply(next);
 });
 
-editor.addEventListener("keyup", syncMode);
-
 editor.addEventListener("click", (event) => {
   const cell = (event.target as HTMLElement).dataset.cell;
   const clicked = cell === undefined ? null : Number(cell);
@@ -125,6 +127,13 @@ candidateList.addEventListener("mousedown", (event) => event.preventDefault());
 candidateList.addEventListener("click", (event) => {
   const button = (event.target as HTMLElement).closest<HTMLElement>("[data-candidate]");
   if (button) choose(Number(button.dataset.candidate));
+});
+
+// 按鈕不搶走打字區的焦點，切換後可以直接繼續打字。
+modeBadge.addEventListener("mousedown", (event) => event.preventDefault());
+modeBadge.addEventListener("click", () => {
+  toggleMode();
+  editor.focus();
 });
 
 $("clear").addEventListener("click", () => {

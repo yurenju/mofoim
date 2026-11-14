@@ -84,10 +84,21 @@ h2 {
   width: 2rem;
   height: 2rem;
   flex: none;
+  padding: 0;
+  border: 0;
   border-radius: 6px;
   background: var(--accent);
   color: var(--bg);
   font-weight: 700;
+}
+
+.mode:hover {
+  filter: brightness(1.12);
+}
+
+.mode:focus-visible {
+  outline: 2px solid var(--text);
+  outline-offset: 2px;
 }
 
 .mode.english {
