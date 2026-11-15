@@ -1,0 +1,3 @@
+# Claude Code 建立 worktree 時，從主 checkout 複製過去的 gitignore 檔案（語法同 .gitignore）。
+# 資料檔要下載上游資料再建置，在 worktree 裡重建太慢，直接沿用主 checkout 的。
+data/mofoim.dat
