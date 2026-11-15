@@ -241,9 +241,7 @@ impl Engine {
                 let offset = (digit as usize - '0' as usize + PAGE_SIZE - 1) % PAGE_SIZE;
                 snapshot.newly_pinned = self.pin_choice(page_start + offset);
             }
-            // 反白在整句猜測上時，採用它就等於送出，交給打字狀態的 Enter 處理。
-            Key::Enter if highlighted == 0 => return None,
-            Key::Enter => snapshot.newly_pinned = self.pin_choice(highlighted),
+            Key::Enter => self.adopt(highlighted, &mut snapshot),
             _ => return None,
         }
         if snapshot.newly_pinned.is_some() {
@@ -280,7 +278,7 @@ impl Engine {
             }
             // 編輯區是空的時候，編輯用的按鍵都交還給應用程式。
             _ if empty => snapshot.handled = false,
-            Key::Enter => snapshot.committed = self.send(),
+            Key::Enter => self.adopt(0, &mut snapshot),
             Key::ShiftEnter => {
                 let pinned = self.pinned.iter().flat_map(|segment| segment.raw.iter());
                 let after = self.after.iter().rev().map(|(raw, _)| raw);
@@ -311,7 +309,7 @@ impl Engine {
                 self.move_right(keys);
             }
             Key::End => self.move_right(self.after.len()),
-            // 進入選字狀態時直接反白第二個：要第一個的話按 Enter 就送出了，不需要進來選。
+            // 進入選字狀態時直接反白第二個：要第一個的話直接按 Enter 就好，不需要進來選。
             Key::Down => {
                 self.highlighted = self.choices().len().checked_sub(1).map(|last| last.min(1));
             }
@@ -426,6 +424,7 @@ impl Engine {
     }
 
     /// 釘住第 `index` 個候選字，回傳釘住的文字；沒有這個候選字就什麼都不做。
+    /// 游標之前的按鍵都釘完時，游標跳到最後，讓之後的按鍵接著猜（同 RIME）。
     fn pin_choice(&mut self, index: usize) -> Option<String> {
         let choice = self.choices().into_iter().nth(index)?;
         self.pinned.push(PinnedSegment {
@@ -435,7 +434,26 @@ impl Engine {
             context: choice.context,
         });
         self.lattice.drop_prefix(choice.end, choice.context);
+        if self.before.is_empty() {
+            self.move_right(self.after.len());
+        }
         Some(choice.text)
+    }
+
+    /// Enter：採用第 `index` 個候選字；採用後沒有剩下的按鍵就送出（見 ADR 0006）。
+    fn adopt(&mut self, index: usize, snapshot: &mut Snapshot) {
+        if self.after.is_empty() && index == 0 {
+            // 採用整句猜測後一定什麼都不剩，直接送出。不經過釘住，因為這不是使用者特地選的字詞。
+            snapshot.committed = self.send();
+        } else if self.before.is_empty() {
+            // 游標之前沒有可以採用的按鍵：只把游標移到最後。
+            self.move_right(self.after.len());
+        } else {
+            snapshot.newly_pinned = self.pin_choice(index);
+            if self.before.is_empty() && self.after.is_empty() {
+                snapshot.committed = self.send();
+            }
+        }
     }
 
     /// 撤銷最後一次釘住：那一段的按鍵退回成還沒釘住的按鍵。

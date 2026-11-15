@@ -104,9 +104,11 @@ function renderCandidates(anchor: HTMLElement) {
   });
 
   const pages = Math.ceil(candidates.length / PAGE_SIZE);
+  // 游標之後還有按鍵時，Enter 只釘住，不送出。
+  const hasKeysAfterCursor = snapshot.afterCursor.length > 0;
   const hints = selecting
-    ? ["數字 選字", active === 0 ? "Enter 送出" : "Enter 選反白的", "Esc 回到打字"]
-    : ["Enter 送出第一個", "↓ 用數字選", "滑鼠點選"];
+    ? ["數字 選字", active === 0 && !hasKeysAfterCursor ? "Enter 送出" : "Enter 選反白的", "Esc 回到打字"]
+    : [hasKeysAfterCursor ? "Enter 釘住第一個" : "Enter 送出第一個", "↓ 用數字選", "滑鼠點選"];
   if (selecting && pages > 1) hints.push(`PgUp PgDn 換頁（${pageStart / PAGE_SIZE + 1}/${pages}）`);
   candidateHint.replaceChildren(...hints.map((hint) => span("", hint)));
 

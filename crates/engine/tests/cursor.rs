@@ -94,13 +94,50 @@ fn a_wrong_key_can_be_fixed_in_place() {
 }
 
 #[test]
-fn enter_also_sends_the_keys_after_the_cursor() {
+fn enter_pins_the_guess_before_the_cursor_when_keys_remain_after_it() {
     let mut engine = engine();
     type_keys(&mut engine, "g.3hk4");
     press(&mut engine, &[Key::Left; 3]);
     let snapshot = engine.handle_key(Key::Enter);
-    assert_eq!(snapshot.committed, "手冊");
+    assert_eq!(snapshot.committed, "", "還有剩下的按鍵，不送出");
+    assert_eq!(shown(&snapshot), "[手]ㄘㄜˋ|");
+    assert_eq!(snapshot.newly_pinned.as_deref(), Some("手"));
+    let snapshot = engine.handle_key(Key::Enter);
+    assert!(snapshot.committed.starts_with('手'), "沒有剩下的了才送出，釘住的段照原樣送出");
     assert!(snapshot.is_empty());
+}
+
+#[test]
+fn a_wrong_guess_at_the_end_can_be_fixed_without_touching_the_rest() {
+    // issue #2 的流程：前半句猜對、句尾猜錯，游標移到錯字前，Enter，再選句尾的字。
+    let mut engine = engine();
+    type_keys(&mut engine, "hk4g4");
+    let snapshot = press(&mut engine, &[Key::SyllableLeft, Key::Enter, Key::Down]);
+    assert_eq!(shown(&snapshot), "[測]ㄕˋ|");
+    let picked = candidates(&snapshot)[1].clone();
+    let snapshot = engine.handle_key(Key::Enter);
+    assert_eq!(snapshot.committed, format!("測{picked}"));
+    assert!(snapshot.is_empty());
+}
+
+#[test]
+fn enter_at_the_end_sends_without_reporting_a_pinned_word() {
+    let mut engine = engine();
+    type_keys(&mut engine, "hk4g4");
+    let snapshot = engine.handle_key(Key::Enter);
+    assert_eq!(snapshot.committed, "測試");
+    assert_eq!(snapshot.newly_pinned, None, "整句猜測不是使用者特地選的字詞");
+}
+
+#[test]
+fn enter_with_nothing_before_the_cursor_only_moves_it_to_the_end() {
+    let mut engine = engine();
+    type_keys(&mut engine, "g.3hk4");
+    pin(&mut engine, "手");
+    engine.handle_key(Key::SyllableLeft);
+    let snapshot = engine.handle_key(Key::Enter);
+    assert_eq!(snapshot.committed, "");
+    assert_eq!(shown(&snapshot), "[手]ㄘㄜˋ|");
 }
 
 #[test]
@@ -109,6 +146,24 @@ fn enter_sends_the_pinned_segments_followed_by_the_guess_for_the_rest() {
     type_keys(&mut engine, "hk4g4");
     pin(&mut engine, "冊");
     assert_eq!(engine.handle_key(Key::Enter).committed, "冊是");
+}
+
+#[test]
+fn pinning_everything_before_the_cursor_moves_the_cursor_to_the_end() {
+    let mut engine = engine();
+    type_keys(&mut engine, "hk4g4");
+    press(&mut engine, &[Key::Left, Key::Left]);
+    let snapshot = engine.pin(0);
+    assert_eq!(shown(&snapshot), "[測]ㄕˋ|", "游標之後的按鍵接著參與猜測");
+    assert_eq!(candidates(&snapshot)[..3], ["是", "事", "試"]);
+}
+
+#[test]
+fn pinning_part_of_the_keys_before_the_cursor_leaves_the_cursor_in_place() {
+    let mut engine = engine();
+    type_keys(&mut engine, "g.3hk4g4");
+    press(&mut engine, &[Key::SyllableLeft]);
+    assert_eq!(shown(&pin(&mut engine, "手")), "[手]ㄘㄜˋ|ㄕˋ");
 }
 
 // ---- 撤銷釘住 ----
@@ -162,7 +217,7 @@ fn moving_the_cursor_into_a_pinned_segment_unpins_it() {
 fn down_enters_the_selecting_state_and_escape_leaves_it() {
     let mut engine = engine();
     assert_eq!(type_keys(&mut engine, "hk4g4").highlighted, None);
-    // 要第一個候選字的話按 Enter 就送出了，所以一進來就反白第二個。
+    // 要第一個候選字的話直接按 Enter 就好，所以一進來就反白第二個。
     assert_eq!(engine.handle_key(Key::Down).highlighted, Some(1));
     let snapshot = engine.handle_key(Key::Escape);
     assert_eq!(snapshot.highlighted, None);
@@ -237,6 +292,27 @@ fn enter_sends_when_the_whole_sentence_guess_is_highlighted() {
     pin(&mut engine, "冊");
     let snapshot = press(&mut engine, &[Key::Down, Key::Up, Key::Enter]);
     assert_eq!(snapshot.committed, "冊是");
+    assert!(snapshot.is_empty());
+    assert_eq!(snapshot.highlighted, None);
+}
+
+#[test]
+fn enter_on_the_highlighted_guess_before_the_cursor_pins_it_and_keeps_selecting_the_rest() {
+    let mut engine = engine();
+    type_keys(&mut engine, "hk4g4");
+    press(&mut engine, &[Key::Left, Key::Left]);
+    let snapshot = press(&mut engine, &[Key::Down, Key::Up, Key::Enter]);
+    assert_eq!(snapshot.committed, "");
+    assert_eq!(shown(&snapshot), "[測]ㄕˋ|");
+    assert_eq!(snapshot.highlighted, Some(0), "和數字鍵一樣，留在選字狀態接著選");
+}
+
+#[test]
+fn enter_sends_when_the_highlighted_candidate_uses_up_every_key() {
+    let mut engine = engine();
+    type_keys(&mut engine, "hk4");
+    let snapshot = press(&mut engine, &[Key::Down, Key::Enter]);
+    assert_eq!(snapshot.committed, "側");
     assert!(snapshot.is_empty());
     assert_eq!(snapshot.highlighted, None);
 }
